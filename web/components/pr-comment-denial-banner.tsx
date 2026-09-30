@@ -25,7 +25,7 @@ export function PrCommentDenialBanner({ deniedAt }: { deniedAt: string }) {
     <div className="mono mb-2.5 flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-[5px] border border-[var(--flag)] px-3 py-1.5 text-[11px] text-foreground">
       <span className="font-medium data-flag">PR comments are not posting</span>
       <span className="text-muted-foreground">
-        Doug&apos;s last attempt was refused (403) at{" "}
+        The last attempt was refused (403) at{" "}
         <b className="font-medium text-foreground">{utcTimestamp(deniedAt)}</b>. The usual cause is the
         pull-requests write permission not being re-accepted in GitHub; a locked conversation, an
         archived repository, or secondary rate limiting produce the same code.

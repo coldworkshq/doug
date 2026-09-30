@@ -8,7 +8,7 @@ import { DocsPageHeader, H2, IC } from "@/components/docs/prose";
 export const metadata = {
   title: "Defect labels",
   description:
-    "How Doug labels a PR defect-inducing from revert anchors in git and GitHub history.",
+    "How Coldworks labels a PR defect-inducing from revert anchors in git and GitHub history.",
 };
 
 export default function DefectLabelsPage() {
@@ -18,11 +18,11 @@ export default function DefectLabelsPage() {
         prose={
           <>
             <DocsPageHeader
-              kicker="Doug reviews · Concepts"
+              kicker="Reviews · Concepts"
               title="Defect labels"
               status="available"
             >
-              A backtest is only as honest as its labels. Doug labels a PR{" "}
+              A backtest is only as honest as its labels. Coldworks labels a PR{" "}
               <b>defect-inducing</b>{" "}
               when later history reverts it — the revert is an
               engineer&rsquo;s own on-the-record verdict that the change was

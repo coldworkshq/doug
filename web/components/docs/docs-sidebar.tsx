@@ -90,7 +90,7 @@ export function DocsSidebar() {
 
         {sections.map((section) => (
           <div key={section.name}>
-            {/* The top bar also links "Doug reviews" and "The audit", to the
+            {/* The top bar also links "Reviews" and "The audit", to the
                 door; the hidden word keeps this link's name distinct. */}
             <Link href={section.href} className={styles.section}>
               {section.name}

@@ -14,7 +14,7 @@ const SESSION_FETCH_TIMEOUT_MS = 5_000;
  *  so the API revision is live first. A widened enum shipping on both sides at
  *  once would hand the new value to a still-running old web build, whose
  *  exact-enum check would reject the entire body — every dashboard would
- *  degrade to "Doug could not load your connected spaces." So this value lands
+ *  degrade to "Coldworks could not load your connected spaces." So this value lands
  *  and deploys while no API emits it, and the API starts emitting it in a
  *  later PR. `session-api.test.mjs` pins both bodies. */
 export type ConnectionStatus = "ready" | "setup_required" | "reauthorize_required";
@@ -442,7 +442,7 @@ async function sessionJson(
 }
 
 export async function getConnections(accessToken: string): Promise<ConnectionsResponse> {
-  const message = "Doug could not load your connected spaces.";
+  const message = "Coldworks could not load your connected spaces.";
   const body = await sessionJson("/v1/sessions/connections", accessToken, message);
   if (!isConnectionsResponse(body)) throw new SessionApiError(message);
   return body;
@@ -452,7 +452,7 @@ export async function bindInstallation(
   accessToken: string,
   installationId: number,
 ): Promise<void> {
-  const message = "Doug could not finish this repository connection.";
+  const message = "Coldworks could not finish this repository connection.";
   try {
     if (!Number.isSafeInteger(installationId) || installationId <= 0) {
       throw new SessionApiError(message);
@@ -479,7 +479,7 @@ export async function setRepositoryThreshold(
   githubRepoId: number,
   value: number | null,
 ): Promise<number | null> {
-  const message = "Doug could not save that flag line.";
+  const message = "Coldworks could not save that flag line.";
   if (!Number.isSafeInteger(githubRepoId) || githubRepoId <= 0) throw new SessionApiError(message);
   if (value !== null && !(Number.isFinite(value) && value >= 0 && value <= 1)) {
     throw new SessionApiError(message);
@@ -519,7 +519,7 @@ export async function setRepositoryDeepRead(
   githubRepoId: number,
   value: boolean,
 ): Promise<RepositorySettings> {
-  const message = "Doug could not save that deep read setting.";
+  const message = "Coldworks could not save that deep read setting.";
   if (!Number.isSafeInteger(githubRepoId) || githubRepoId <= 0) throw new SessionApiError(message);
   // `"false"` is not `false`. The API types this field strictly and would
   // answer 422, but the refusal belongs here, where the mistake is legible.
@@ -554,7 +554,7 @@ export async function setRepositoryPrComment(
   githubRepoId: number,
   value: boolean,
 ): Promise<RepositorySettings> {
-  const message = "Doug could not save that PR comment setting.";
+  const message = "Coldworks could not save that PR comment setting.";
   if (!Number.isSafeInteger(githubRepoId) || githubRepoId <= 0) throw new SessionApiError(message);
   // `"true"` is not `true`: the API types this field strictly and would answer
   // 422, but the refusal belongs here, where the mistake is legible.
@@ -586,7 +586,7 @@ export async function getSessionRuns(
   accessToken: string,
   repo = "all",
 ): Promise<RunListResponse> {
-  const message = "Doug could not load the run ledger.";
+  const message = "Coldworks could not load the run ledger.";
   const body = await sessionJson(
     `/v1/sessions/runs?repo=${encodeURIComponent(repo)}&limit=${SESSION_RUNS_LIMIT}&offset=0`,
     accessToken,
@@ -600,7 +600,7 @@ export async function getSessionRun(
   accessToken: string,
   verdictId: number,
 ): Promise<RunDetail> {
-  const message = "Doug could not load this run.";
+  const message = "Coldworks could not load this run.";
   const body = await sessionJson(`/v1/sessions/runs/${verdictId}`, accessToken, message);
   if (!isRunDetail(body)) throw new SessionApiError(message);
   return body;
@@ -617,7 +617,7 @@ export async function getReceipt(
   repo: string,
   prNumber: number,
 ): Promise<ReceiptResponse> {
-  const message = "Doug could not load this receipt.";
+  const message = "Coldworks could not load this receipt.";
   const body = await sessionJson(
     `/v1/prs/${prNumber}/receipt?repo=${encodeURIComponent(repo)}`,
     accessToken,
@@ -730,7 +730,7 @@ export async function getRepositoryDecisions(
   accessToken: string,
   githubRepoId: number,
 ): Promise<RepositoryDecisionsResult> {
-  const message = "Doug could not read this repository's decision records.";
+  const message = "Coldworks could not read this repository's decision records.";
   if (!Number.isSafeInteger(githubRepoId) || githubRepoId <= 0) throw new SessionApiError(message);
   let response: Response;
   try {

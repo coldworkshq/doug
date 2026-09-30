@@ -7,9 +7,9 @@ import { getScoreboard } from "@/lib/api";
 /** Named as Doug's: the root metadata is the product's (ADR-0034); the
  *  queue and the scoreboard are the reviewer's own surfaces. */
 export const metadata: Metadata = {
-  title: "Scoreboard — Doug reviews",
+  title: "Scoreboard — Reviews",
   description:
-    "Doug's published miss rate: what it cleared that later came back, counted and dated on the locked cadence. Part of Coldworks.",
+    "The published miss rate: what Coldworks cleared that later came back, counted and dated on the locked cadence. Part of Coldworks.",
 };
 
 function day(iso: string | null): string {

@@ -36,7 +36,7 @@ function code(text) {
 
 test("dashboard source keeps the forensic ledger copy and provider-neutral empty state", async () => {
   const page = await readFile(pageUrl, "utf8");
-  assert.match(page, /You're in\. Connect GitHub only when you want Doug to review repositories\./);
+  assert.match(page, /You're in\. Connect GitHub only when you want Coldworks to review repositories\./);
   assert.match(await readFile(railUrl, "utf8"), /Lema — separate product/);
   assert.match(page, /What the reader was given/);
   // Intent: A COVERAGE RULER EXISTS ON THIS PAGE. Until Phase B PR 2 this was
@@ -449,7 +449,7 @@ test("a sign-in whose derivation failed says so instead of claiming nothing is c
   // of them have simply not connected anything — and an ungated one would still
   // satisfy a test that only looked for the words.
   assert.match(page, /\{scopeUnconfirmed && \(/);
-  const note = page.indexOf("Doug could not confirm your repositories");
+  const note = page.indexOf("Coldworks could not confirm your repositories");
   const gate = page.indexOf("{scopeUnconfirmed && (");
   assert.ok(gate >= 0 && gate < note, "the copy must sit inside the scopeUnconfirmed branch");
 });
@@ -910,7 +910,7 @@ test("the PR comment toggle is its own form and cannot carry the flag line with 
   // last comment stays. Copy that described only the on-state left the one
   // fact an operator needs at the moment of deciding unsaid, and a switch whose
   // off-state you have to guess at is guessed at wrong.
-  assert.match(control, /Off, Doug stops updating the comment/);
+  assert.match(control, /Off, Coldworks stops updating the comment/);
   assert.match(control, /the last one it posted stays where it is/);
   // AND NOTHING HEDGES IT ANY MORE (#144). The staged-rollout sentence was
   // true only while `DOUG_PR_COMMENT_INSTALLATIONS` could hold a space dark
@@ -963,8 +963,8 @@ test("the deep read toggle is its own form and states BOTH of its consequences",
   // of its own — moves the band from the reader default to the deterministic
   // one. Copy that named only the first would let someone switch off "the AI
   // bit" and silently halve how often Doug asks for a human.
-  assert.match(control, /Doug scores on\s*\n?\s*structural signals alone/);
-  assert.match(control, /moves the line Doug bands against/);
+  assert.match(control, /Coldworks scores on\s*\n?\s*structural signals alone/);
+  assert.match(control, /moves the line Coldworks bands against/);
   // Conditional on the repository actually being unset, because a repo that
   // has set 0.75 keeps 0.75 through this toggle. Promising a move there would
   // be the same lie pointing the other way.
@@ -973,7 +973,7 @@ test("the deep read toggle is its own form and states BOTH of its consequences",
   // line's copy follows, so this suite is not pinned to one deployment's
   // environment. Asserted on the paragraph, not the file: the docblock above
   // legitimately quotes the numbers while explaining them.
-  const consequence = code(control).match(/On, Doug sends the diff[\s\S]*?<\/p>/)?.[0] ?? "";
+  const consequence = code(control).match(/On, Coldworks sends the diff[\s\S]*?<\/p>/)?.[0] ?? "";
   assert.ok(consequence, "the deep read consequence paragraph is gone");
   assert.match(consequence, /defaults\.reader\.toFixed\(2\)/);
   assert.match(consequence, /defaults\.fallback\.toFixed\(2\)/);
@@ -983,7 +983,7 @@ test("the deep read toggle is its own form and states BOTH of its consequences",
   // them to believe the band is still the reader's. One sentence per state.
   assert.match(consequence, /deepRead\s*\n?\s*\?/);
   assert.match(consequence, /turning the read off also moves the line/);
-  assert.match(consequence, /the line Doug bands against moved with the read/);
+  assert.match(consequence, /the line Coldworks bands against moved with the read/);
   for (const literal of ["0.30", "0.62"]) {
     assert.equal(
       consequence.includes(literal),

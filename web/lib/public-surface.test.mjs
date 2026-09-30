@@ -30,9 +30,10 @@ const [
   findingsLog,
   footer,
   links,
+  landingHtml,
 ] = await Promise.all([
   readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
-  readFile(new URL("../app/doug/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/reviews/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/queue/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/loading.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/docs/page.tsx", import.meta.url), "utf8"),
@@ -45,13 +46,14 @@ const [
   readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/docs/quickstart/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/docs/risk-routing/page.tsx", import.meta.url), "utf8"),
-  readFile(new URL("../app/docs/what-doug-gets-wrong/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/docs/what-reviews-get-wrong/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/docs/report/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../../README.md", import.meta.url), "utf8"),
   readFile(new URL("../../api/README.md", import.meta.url), "utf8"),
   readFile(new URL("../../docs/findings-log.jsonl", import.meta.url), "utf8"),
   readFile(new URL("../components/site-footer.tsx", import.meta.url), "utf8"),
   readFile(new URL("./links.ts", import.meta.url), "utf8"),
+  readFile(new URL("../public/landing.html", import.meta.url), "utf8"),
 ]);
 
 /** The log's own shape, for the pins below.
@@ -144,14 +146,14 @@ test("the header's public routes survive below the sm breakpoint", () => {
 
 test("nav order is the door's: the three moments, the audit, the docs; GitHub and About last", () => {
   // ADR-0034: the header wears the landing page's own nav, in its order.
-  // Doug reviews is a real page (/doug); Memory and Guards are sections of
+  // Reviews is a real page (/reviews); Memory and Guards are sections of
   // the door until their workspace screens are what a stranger should see
   // first. GitHub and About are hardcoded after the NAV_LINKS.map, in that
   // order. The Dashboard link that used to lead is gone: Sign in returns a
   // live session straight to /dashboard/overview, so a plain link bought
   // nothing a static page could afford.
   const order = [
-    'label: "Doug reviews"',
+    'label: "Reviews"',
     'label: "Memory"',
     'label: "Guards"',
     'label: "The audit"',
@@ -172,7 +174,7 @@ test("nav order is the door's: the three moments, the audit, the docs; GitHub an
     );
   }
   assert.equal(header.includes('href: "/dashboard"'), false, "the Dashboard link is retired");
-  assert.match(header, /\{ href: "\/doug", label: "Doug reviews" \}/);
+  assert.match(header, /\{ href: "\/reviews", label: "Reviews" \}/);
 });
 
 test("the links NOT carried by NAV_LINKS still exist in BOTH navs", () => {
@@ -207,20 +209,82 @@ test("about page exists, wears the shared chrome, and is reachable from the head
   assert.equal(about.includes('className="dark'), false);
 });
 
-test("about page tells the naming story, and every gallery photo actually exists", () => {
-  assert.match(about, /Saint Bernard/);
+test("about page is the company's, and the dog retired with the name", () => {
+  // Until 2026-09-30 this was the dog's page: the product was named after a
+  // Saint Bernard, with four photos and a fact button. The 2026-09-23 naming
+  // ruling retired the dog with the name, and the founder ruled the page be
+  // rewritten about Coldworks. Stripping comments first: the page's own
+  // docblock says what it replaced, and a pin that fired on that prose would
+  // push the next author into deleting the history to get green.
+  const rendered = about.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.equal(/Doug/.test(rendered), false, "the about page still names Doug");
+  assert.equal(/Saint Bernard/i.test(rendered), false);
+  assert.equal(rendered.includes("/about/doug/"), false, "the about page still shows a dog photo");
+  assert.equal(existsSync(new URL("../public/about/doug", import.meta.url)), false);
+  assert.equal(existsSync(new URL("../components/about/doug-fact-button.tsx", import.meta.url)), false);
+  assert.match(rendered, /Coldworks runs agent workflows/);
 
-  // Matching the `/about/doug/` prefix in source text proved nothing: it
-  // stayed true for weeks while the directory held only a README and the
-  // page shipped four broken-image icons. Resolve each src against
-  // web/public and stat it, so a missing file or a typo'd extension fails
-  // here instead of in a visitor's browser.
-  const srcs = [...about.matchAll(/src: "(\/about\/doug\/[^"]+)"/g)].map((m) => m[1]);
-  assert.equal(srcs.length, 4, "expected four gallery photos in PHOTOS");
-  for (const src of srcs) {
-    const onDisk = new URL(`../public${src}`, import.meta.url);
-    assert.ok(existsSync(onDisk), `${src} is referenced but not in web/public`);
+  // The three rules survived the rename word for word (item 6 of the
+  // ruling), so the page quotes the README rather than paraphrasing it: each
+  // rule's heading and its first sentence after the name must appear in both.
+  for (const rule of [
+    ["Route, never block.", "The PR proceeds either way. Coldworks only decides who has to look. Tools that block get disabled."],
+    ["Never write code, never open a PR.", "The moment it authors, it owns the authorship."],
+    ["Publish the miss rate.", "Every quarter, including the incidents that came from PRs it cleared."],
+  ]) {
+    for (const text of rule) {
+      assert.ok(readme.includes(text), `README lost the rule text: ${text}`);
+      assert.ok(about.includes(text), `the about page does not quote the rule: ${text}`);
+    }
   }
+});
+
+test("the retired routes redirect permanently to the name-free ones", async () => {
+  // /doug and /docs/what-doug-gets-wrong are written where nobody edits them
+  // again: every sticky comment the API has posted links the docs path
+  // (api/doug/pr_comment.py), and the landing, llms.txt, and shared links
+  // named /doug. A temporary redirect would let a cache or a crawler drop the
+  // new address; a missing one is a 404 in every old pull request.
+  const config = await readFile(new URL("../next.config.ts", import.meta.url), "utf8");
+  for (const [from, to] of [
+    ["/doug", "/reviews"],
+    ["/docs/what-doug-gets-wrong", "/docs/what-reviews-get-wrong"],
+  ]) {
+    const rule = new RegExp(
+      `\\{ source: "${from}", destination: "${to}", permanent: true \\}`,
+    );
+    assert.match(config, rule, `${from} is not a permanent redirect to ${to}`);
+    // The redirect only works if the old route is gone and the new one renders:
+    // Next checks redirects before pages, but a page left at the old path is a
+    // second copy to drift, and a missing new page makes the redirect a 404.
+    assert.ok(existsSync(new URL(`../app${to}/page.tsx`, import.meta.url)), `${to} has no page`);
+    assert.equal(existsSync(new URL(`../app${from}/page.tsx`, import.meta.url)), false, `${from} still has a page`);
+  }
+  // The docs path the API writes into every comment is the one redirected.
+  const prComment = await readFile(new URL("../../api/doug/pr_comment.py", import.meta.url), "utf8");
+  assert.match(prComment, /_DOCS_PATH = "\/docs\/what-doug-gets-wrong"/);
+});
+
+test("the public copy names Coldworks, and Doug only where GitHub still shows it", () => {
+  // The 2026-09-23 naming ruling: Coldworks is the only public name. What may
+  // still say Doug on these pages is what a reader types or what GitHub shows
+  // today: the repository slug, the App's install slug, and the facsimile
+  // check run and its author, which must match the real check until
+  // api/doug/check_run.py renames (doug#372). Everything else is a leftover.
+  const door = landingHtml
+    .replaceAll("coldworkshq/doug", "")
+    .replaceAll("apps/dougs-review", "")
+    .replace(/<b>Doug — [^<]*<\/b>/g, "")
+    .replace(/<b>doug<\/b> commented/g, "");
+  assert.equal(/doug/i.test(door), false, `the door still says Doug: ${door.match(/.{0,40}doug.{0,40}/i)?.[0]}`);
+  // The facsimile is still there, so the carve-out above is not vacuous.
+  assert.match(landingHtml, /<b>Doug — needs a reader<\/b>/);
+
+  const code = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  for (const [name, source] of [["/reviews", landing], ["/docs", intro], ["the footer", footer], ["the header", header]]) {
+    assert.equal(/Doug/.test(code(source)), false, `${name} still says Doug`);
+  }
+  assert.equal(/^# Doug/m.test(llms), false, "llms.txt still opens with Doug");
 });
 
 test("the landing miss-rate panel points at the live scoreboard", () => {
@@ -319,7 +383,7 @@ test("the changelog records the instrument becoming visible", () => {
   assert.match(changelog, /scoreboard/i);
 });
 
-test("about page does not call Doug pre-build", () => {
+test("about page does not call the product pre-build", () => {
   // The App path is live on this repo. "pre-build" on a header-linked page
   // is the same class of publicly false maturity claim as README "Pre-build".
   assert.equal(/pre-build/i.test(about), false);
@@ -354,13 +418,13 @@ test("risk-routing does not present the live scorer as model-free", () => {
   assert.equal(risk.includes("no model in the hot path"), false);
 });
 
-test("what Doug gets wrong quotes a dated snapshot, not a live count", () => {
+test("what Coldworks gets wrong quotes a dated snapshot, not a live count", () => {
   assert.equal(wrong.includes("Roughly half"), false);
   assert.equal(wrong.includes("12 rows today"), false);
   assert.equal(llms.includes("Roughly half"), false);
 
   for (const [source, name] of [
-    [wrong, "what-doug-gets-wrong"],
+    [wrong, "what-reviews-get-wrong"],
     [llms, "llms.txt"],
   ]) {
     // A number with no date reads as current, and cannot be. Both surfaces
@@ -436,7 +500,7 @@ test("llms.txt matches the live showcase surface, not the July sketch", () => {
   assert.equal(llms.includes("Planned: tenant-scoped GET /v1/queue"), false);
 });
 
-test("what Doug gets wrong does not claim every log row is backfill", () => {
+test("what Coldworks gets wrong does not claim every log row is backfill", () => {
   // Most rows are prospective. A callout that still says every row is
   // backfill contradicts the rail on the same page.
   assert.ok(counts.prospective > counts.backfill);
@@ -533,13 +597,14 @@ test("risk-routing meta does not call live hotspots learned", () => {
   assert.equal(risk.includes("learned hotspots"), false);
 });
 
-test("the brand footer attributes Doug to Coldworks, and links to the domain rather than a run.app URL", () => {
+test("the brand footer names Coldworks, and links to the domain rather than a run.app URL", () => {
   // Three separate ways this line goes wrong, so three pins rather than one.
   //
   // 1. The text disappears. A footer is the easiest place in the tree for a
   //    line to be dropped in an unrelated layout edit and for nobody to
   //    notice, because nothing renders differently enough to catch an eye.
-  assert.match(footer, /A Coldworks product/);
+  assert.match(footer, /coldworks · routes, never blocks/);
+  assert.match(footer, /coldworks\.dev\s*<\/a>/);
   // 2. The href is retyped as a literal. The whole point of links.ts is that
   //    a rename means editing one file; a hand-typed URL here silently opts
   //    out of that and is what the GITHUB_REPO_SLUG comment already warns

@@ -41,7 +41,7 @@ test("the latest-verdict caption states the external EXCLUSION, not merely the t
   // exists to prevent — so it cannot discriminate the thing that matters.
   assert.equal(
     caption,
-    "Doug's most recent score. Excludes external reviews, which carry no read.",
+    "The most recent score Coldworks gave. Excludes external reviews, which carry no read.",
   );
 });
 

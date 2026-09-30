@@ -104,7 +104,7 @@ test("direct bind accepts exactly 204 and keeps upstream and token failures cons
         bindInstallation("workos-session-secret", 404),
         (error) => {
           assert.ok(error instanceof SessionApiError);
-          assert.equal(error.message, "Doug could not finish this repository connection.");
+          assert.equal(error.message, "Coldworks could not finish this repository connection.");
           assert.equal(String(error).includes("workos-session-secret"), false);
           assert.equal(String(error).includes("provider token"), false);
           assert.equal(String(error).includes("network carried"), false);
@@ -291,7 +291,7 @@ test("session API failures never echo the bearer or upstream response body", asy
     await assert.rejects(
       getConnections("secret-bearing-value"),
       (error) => {
-        assert.equal(error.message, "Doug could not load your connected spaces.");
+        assert.equal(error.message, "Coldworks could not load your connected spaces.");
         assert.equal(String(error).includes("secret-bearing-value"), false);
         assert.equal(String(error).includes("provider said"), false);
         return true;

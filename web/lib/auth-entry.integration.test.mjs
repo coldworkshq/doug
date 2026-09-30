@@ -197,7 +197,8 @@ after(async () => {
 });
 
 test("the door is the Coldworks landing, and its Log in is provider-neutral account entry", async () => {
-  // ADR-0034: / is public/landing.html through a rewrite; Doug's page is /doug.
+  // ADR-0034: / is public/landing.html through a rewrite; the reviewer's page
+  // is /reviews (/doug until the 2026-09-23 naming ruling).
   const response = await fetch(`${origin}/`);
   const html = await response.text();
 
@@ -207,8 +208,26 @@ test("the door is the Coldworks landing, and its Log in is provider-neutral acco
   assert.match(html, /href="\/dashboard\/overview"/);
 });
 
-test("Doug's own page keeps its account entry, one link in", async () => {
-  const response = await fetch(`${origin}/doug`);
+test("the retired /doug and what-doug-gets-wrong paths answer 308 to their new homes", async () => {
+  // Every sticky comment links /docs/what-doug-gets-wrong, and old links name
+  // /doug; neither is ever edited again, so both must stay permanent. Served,
+  // not read from next.config.ts: a rule that parses but never fires, or a
+  // page left at the old path that shadows it, passes a source pin and fails
+  // here.
+  for (const [from, to] of [
+    ["/doug", "/reviews"],
+    ["/docs/what-doug-gets-wrong", "/docs/what-reviews-get-wrong"],
+  ]) {
+    const response = await fetch(`${origin}${from}`, { redirect: "manual" });
+    assert.equal(response.status, 308, `${from} answered ${response.status}`);
+    assert.equal(new URL(response.headers.get("location"), origin).pathname, to);
+    const landed = await fetch(`${origin}${to}`);
+    assert.equal(landed.status, 200, `${to} answered ${landed.status}`);
+  }
+});
+
+test("the reviewer's own page keeps its account entry, one link in", async () => {
+  const response = await fetch(`${origin}/reviews`);
   const html = await response.text();
 
   assert.equal(response.status, 200);

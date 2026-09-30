@@ -92,7 +92,7 @@ function plural(n: number, word: string): string {
 /** The line, with the flag that turns it off named in the API's terms. */
 export function readsBeforeDiffLine(flags: ReadsBeforeDiff): { on: boolean; detail: string } {
   if (flags.value) {
-    return { on: true, detail: "Doug reads these records before it reads a diff." };
+    return { on: true, detail: "Coldworks reads these records before it reads a diff." };
   }
   const off: string[] = [];
   if (!flags.deep_read) off.push("deep read is off for this repository");

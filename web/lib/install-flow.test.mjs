@@ -465,17 +465,17 @@ test("the refused-authority 403 offers no link that returns to the same 403", as
 
     // The page still says the account is not lost, which is the one thing a 403
     // must not leave a reader guessing about.
-    assert.match(copy, /Doug account remains available/i);
+    assert.match(copy, /Coldworks account remains available/i);
     // It names the remedy that can change the answer, and says why signing in
     // again cannot. Without this pin the copy can quietly revert to a reconnect.
-    assert.match(copy, /sign out of Doug/i);
+    assert.match(copy, /sign out of Coldworks/i);
     assert.match(copy, /changes nothing/i);
     // THE GOAL PRECEDES THE INSTRUCTION, and the case the instruction cannot
     // help is named by something the reader can check rather than by a claim
     // about who they are. The API returns one 404 for three causes, so an
     // unconditional "you are signed in as the wrong account" is wrong twice.
     const remedy = copy.indexOf("To connect this repository");
-    const instruction = copy.indexOf("sign out of Doug");
+    const instruction = copy.indexOf("sign out of Coldworks");
     assert.ok(remedy >= 0 && remedy < instruction, "the 403 instructs before it states the goal");
     assert.match(copy, /If you do that and this page comes back/i);
     // The operator escape hatch is a real, reachable destination.

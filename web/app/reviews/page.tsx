@@ -9,13 +9,15 @@ import { SiteHeader } from "@/components/site-header";
 import { getQueue, getScoreboard } from "@/lib/api";
 import { GITHUB_REPO_URL } from "@/lib/links";
 
-/** Doug's own page, one link in from the door (ADR-0034): the reviewer that
- *  keeps its name inside Coldworks. The root layout's metadata is the
- *  product's; this page says what Doug is. */
+/** The reviewer's page, one link in from the door (ADR-0034). It lived at
+ *  /doug until the 2026-09-23 naming ruling retired "Doug" as a public name:
+ *  reviewing pull requests is a capability of Coldworks, called Reviews, and
+ *  next.config.ts redirects /doug here permanently. The root layout's
+ *  metadata is the product's; this page says what Reviews is. */
 export const metadata: Metadata = {
-  title: "Doug — most pull requests don't need you",
+  title: "Reviews — most pull requests don't need you",
   description:
-    "Risk-routed code review. Doug reads the diff, routes the handful that need human eyes, and will publish its miss rate.",
+    "Risk-routed code review. Coldworks reads the diff, routes the handful that need human eyes, and will publish its miss rate.",
 };
 
 // The three rules, verbatim from the README. Not numbered on the page: they
@@ -24,15 +26,15 @@ export const metadata: Metadata = {
 const RULES = [
   {
     title: "Route, never block",
-    body: "Doug orders attention. It holds no merge hostage, gates no pipeline, and adds zero seconds to a cleared PR.",
+    body: "Coldworks orders attention. It holds no merge hostage, gates no pipeline, and adds zero seconds to a cleared PR.",
   },
   {
     title: "Never writes code",
-    body: "A reviewer that also writes is marking its own homework. Doug decides where eyes go — it never generates a fix.",
+    body: "A reviewer that also writes is marking its own homework. Coldworks decides where eyes go — it never generates a fix.",
   },
   {
     title: "Will publish its miss rate",
-    body: "Every escaped defect Doug cleared will be counted, dated, and published on the locked cadence. If the number is bad, you'll see it here first.",
+    body: "Every escaped defect Coldworks cleared will be counted, dated, and published on the locked cadence. If the number is bad, you'll see it here first.",
   },
 ];
 
@@ -70,7 +72,7 @@ const LAYERS = [
   {
     tag: "accruing",
     title: "Remembers it",
-    body: "Every verdict is a ledger row — dated, immutable, waiting to be graded. A repo running Doug for a year holds a calibrated risk record of itself that no point-in-time reviewer can replicate.",
+    body: "Every verdict is a ledger row — dated, immutable, waiting to be graded. A repo running Coldworks for a year holds a calibrated risk record of itself that no point-in-time reviewer can replicate.",
   },
   {
     tag: "planned · no dates promised",
@@ -82,39 +84,39 @@ const LAYERS = [
 // The cost argument, row by row. Structural on purpose: no dollar figures,
 // because ADR-0004 records that Doug's COGS scale with PR volume too when
 // the reader is on — the honest claim is BOUNDED spend and ROUTED attention,
-// not a skipped model call. `doug` cells that quote a live number are built
+// not a skipped model call. `ours` cells that quote a live number are built
 // in the component, where the queue is in scope.
-const COST_ROWS: { what: string; everything: string; doug: string }[] = [
+const COST_ROWS: { what: string; everything: string; ours: string }[] = [
   {
     what: "Model spend per PR",
     everything:
       "A full agentic read of the branch, as large as the branch is. Run it twice, pay twice.",
-    doug: "One read of the diff, capped at 100k characters at a fixed effort. The look-up passes that follow run a cheaper model.",
+    ours: "One read of the diff, capped at 100k characters at a fixed effort. The look-up passes that follow run a cheaper model.",
   },
   {
     what: "Where the spend shows",
     everything: "On a bill, later.",
-    doug: "On the check run itself: “deep reads 143/200 this cycle.” The meter is the surface you already read.",
+    ours: "On the check run itself: “deep reads 143/200 this cycle.” The meter is the surface you already read.",
   },
   {
     what: "When it runs",
     everything: "When someone remembers to run it.",
-    doug: "On every push, as a GitHub check. Nobody has to remember, and nobody can forget.",
+    ours: "On every push, as a GitHub check. Nobody has to remember, and nobody can forget.",
   },
   {
     what: "The merge button",
     everything: "Whatever the tool decides that day.",
-    doug: "Untouched. The check is neutral, every time, by design.",
+    ours: "Untouched. The check is neutral, every time, by design.",
   },
   {
     what: "When the read fails",
     everything: "You re-run it, or it ships unread.",
-    doug: "The deterministic tier scores it without a model and the check says so. A downgrade is never silent.",
+    ours: "The deterministic tier scores it without a model and the check says so. A downgrade is never silent.",
   },
   {
     what: "After the merge",
     everything: "Nothing. The comments were the product.",
-    doug: "A 14- and 60-day clock, graded against this repository's own reverts, published on a date.",
+    ours: "A 14- and 60-day clock, graded against this repository's own reverts, published on a date.",
   },
 ];
 
@@ -176,10 +178,10 @@ export default async function Home() {
               className="animate-rise mt-7 max-w-lg text-lg leading-relaxed text-muted-foreground"
               style={{ animationDelay: "160ms" }}
             >
-              Doug reads every pull request once, routes the few that need a
-              human, and clears the rest. Every merge starts a clock against
-              this repository&rsquo;s own reverts. When Doug is wrong, it
-              says so — in public.
+              Coldworks reads every pull request once, routes the few that
+              need a human, and clears the rest. Every merge starts a clock
+              against this repository&rsquo;s own reverts. When Coldworks is
+              wrong, it says so — in public.
             </p>
             <div
               className="animate-rise mt-9 flex flex-wrap items-center gap-3"
@@ -302,7 +304,7 @@ export default async function Home() {
             </code>{" "}
             on every branch, a bot on every diff — scale their spend with
             exactly that number, and still leave a person reading comments
-            on all of them. Doug spends one bounded read per PR, then spends
+            on all of them. Coldworks spends one bounded read per PR, then spends
             your attention only above your flag line.
           </p>
 
@@ -329,7 +331,7 @@ export default async function Home() {
                     A model review of everything
                   </th>
                   <th className="border-l border-border bg-background/60 px-5 py-3 text-left text-foreground">
-                    Doug
+                    Coldworks
                   </th>
                 </tr>
               </thead>
@@ -350,14 +352,14 @@ export default async function Home() {
                   <tr key={r.what}>
                     <th className="px-5 py-4 text-left font-medium">{r.what}</th>
                     <td className="px-5 py-4 text-muted-foreground">{r.everything}</td>
-                    <td className="border-l border-border bg-background/60 px-5 py-4">{r.doug}</td>
+                    <td className="border-l border-border bg-background/60 px-5 py-4">{r.ours}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
           <p className="mt-4 max-w-2xl font-mono text-xs leading-relaxed text-muted-foreground">
-            Doug is not model-free. With the reader on, every PR costs a read;
+            Coldworks is not model-free. With the reader on, every PR costs a read;
             the deterministic tier is what runs when it is off or fails. The
             saving is bounded spend and routed attention, not a skipped
             model call.
@@ -396,10 +398,10 @@ export default async function Home() {
             <p className="mt-8 max-w-sm text-sm leading-relaxed text-muted-foreground">
               The judgment about the code is made without knowing who wrote
               it. That claim is narrow on purpose: it covers the read, not
-              the whole of Doug.
+              the whole review.
             </p>
             <p className="mt-4 max-w-sm text-sm leading-relaxed text-muted-foreground">
-              Doug does see authorship elsewhere. The deterministic fallback —
+              Coldworks does see authorship elsewhere. The deterministic fallback —
               used when a read fails — scores a PR higher when a bot opened
               it, and the queue tells you who wrote each one, because you
               need that to route. What it never does is let the reader grade
@@ -458,7 +460,7 @@ export default async function Home() {
             Others learn what reviewers say
           </p>
           <h2 className="font-heading mt-4 max-w-3xl text-3xl leading-tight font-semibold tracking-tight md:text-5xl">
-            Doug grades what production did, remembers it, and will tell your
+            Coldworks grades what production did, remembers it, and will tell your
             agents <span className="text-molten">before they type</span>.
           </h2>
           <div className="hairline-grid mt-10 rounded-lg md:grid-cols-3">

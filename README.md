@@ -1,18 +1,18 @@
-<h1 align="center">Doug</h1>
+<h1 align="center">Coldworks</h1>
 
 <p align="center"><em>Most pull requests don't need a human.</em></p>
 
 ---
 
-Doug works out which ones do.
+Coldworks works out which ones do.
 
-Every AI code reviewer on the market runs a language model over every diff. That makes their cost scale with the exact thing coding agents are inflating, and it still leaves a person reading bot comments on 100% of pull requests. Doug inverts the *attention*: most PRs clear, and only the small fraction that carries real risk gets a human. When the reader is on, that routing verdict still comes from an LLM reading the diff — the deterministic rules are the labeled fallback, not a claim that production is model-free.
+Every AI code reviewer on the market runs a language model over every diff. That makes their cost scale with the exact thing coding agents are inflating, and it still leaves a person reading bot comments on 100% of pull requests. Coldworks inverts the *attention*: most PRs clear, and only the small fraction that carries real risk gets a human. When the reader is on, that routing verdict still comes from an LLM reading the diff — the deterministic rules are the labeled fallback, not a claim that production is model-free.
 
-Doug is a Saint Bernard. The breed has had one job for three centuries: find the traveler buried in the snow, and bring help. That's the product — find the pull request that's in trouble, and bring a human. Doug doesn't dig you out himself, and he doesn't bark at every hiker on the trail.
+This repository is the pull request reviewer in Coldworks, called Reviews on [coldworks.dev](https://coldworks.dev). It keeps its codename, `doug`, in names you type: the repository, the Python package, the `doug-backtest` command, and the `DOUG_*` settings.
 
 ## Three rules
 
-**Route, never block.** The PR proceeds either way. Doug only decides who has to look. Tools that block get disabled.
+**Route, never block.** The PR proceeds either way. Coldworks only decides who has to look. Tools that block get disabled.
 
 **Never write code, never open a PR.** The moment it authors, it owns the authorship.
 
@@ -62,7 +62,7 @@ docker build -f console/Dockerfile -t doug-console .
 
 ## Status
 
-**Early preview, dogfooding on this repository.** Doug runs as a GitHub App (`dougs-review`): webhook ingest, a durable worker, a neutral check run on every PR (ADR-0010). Merge to `main` deploys API + web (ADR-0009). It is not a self-serve product for other orgs yet.
+**Early preview, dogfooding on this repository.** The reviewer runs as a GitHub App, installed as `dougs-review`: webhook ingest, a durable worker, a neutral check run on every PR (ADR-0010). Merge to `main` deploys API + web (ADR-0009). It is not a self-serve product for other orgs yet.
 
 The LLM reader is the scoring path when enabled (ADR-0004). The 2026-07 probe's AUC 0.69 / 0.67 is that probe, not a measurement of the shipped 100k-char reader (ADR-0012). Deterministic rule weights remain priors.
 

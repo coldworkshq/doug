@@ -1,41 +1,37 @@
 import type { Metadata } from "next";
 
-import { DougFactButton } from "@/components/about/doug-fact-button";
-import { DougLogo } from "@/components/doug-logo";
+import { BrandMark } from "@/components/brand-mark";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { GITHUB_REPO_SLUG, GITHUB_REPO_URL } from "@/lib/links";
 
+/** The company page. Until the 2026-09-23 naming ruling it was the dog's page
+ *  (the product was named after a Saint Bernard); the ruling retired the dog
+ *  with the name, and the founder ruled this page be rewritten about
+ *  Coldworks. Every sentence below is taken from material already public:
+ *  the thesis, the door's own copy (public/landing.html), and the three rules
+ *  from the README, word for word. Nothing here states a customer, a team
+ *  size, a price, or a comparison, and nothing should: this repo is public. */
 export const metadata: Metadata = {
-  title: "About — Doug",
+  title: "About — Coldworks",
   description:
-    "Why a pull-request router is named after a Saint Bernard, who built it, and how to get involved.",
+    "What Coldworks is, the three rules its reviews run by, and how to get involved.",
 };
 
-// Four real photos of the real Doug, served from web/public/about/doug/.
-// Sources were screenshots (PNG); converted to JPEG and capped at 800px on
-// the long edge — the tiles render ~470px at 2x, so that is ample. The
-// kitchen shot had a ~20px black screenshot bar cropped off its right edge.
-const PHOTOS = [
+// The three rules, word for word from the README. They survived the rename
+// unchanged except for the name (2026-09-23 naming ruling, item 6).
+const RULES = [
   {
-    src: "/about/doug/kitchen-selfie.jpg",
-    alt: "Andrew and Doug, nose to nose in the kitchen",
-    caption: "Nose to nose in the kitchen.",
+    title: "Route, never block.",
+    body: "The PR proceeds either way. Coldworks only decides who has to look. Tools that block get disabled.",
   },
   {
-    src: "/about/doug/couch-loaf.jpg",
-    alt: "Doug loafed over the back of the couch",
-    caption: "Off duty, guarding the back of the couch.",
+    title: "Never write code, never open a PR.",
+    body: "The moment it authors, it owns the authorship.",
   },
   {
-    src: "/about/doug/rock-hike.jpg",
-    alt: "Andrew crouched next to Doug on the rocks by a creek",
-    caption: "Post-hike, still working the smile.",
-  },
-  {
-    src: "/about/doug/nose-boop.jpg",
-    alt: "Extreme close-up of Doug's nose",
-    caption: "The business end.",
+    title: "Publish the miss rate.",
+    body: "Every quarter, including the incidents that came from PRs it cleared. A gate that never publishes its errors is a marketing claim; one that does can survive being wrong. The scoreboard is live; the miss-rate number is not yet.",
   },
 ] as const;
 
@@ -46,7 +42,7 @@ const storyIssueUrl = new URL(`${GITHUB_REPO_URL}/issues/new`);
 storyIssueUrl.searchParams.set("title", "A PR that needed a human");
 storyIssueUrl.searchParams.set(
   "body",
-  "**What happened**\n\n\n**What Doug would have seen (if you know)**\n\n\n**Repo (optional)**\n",
+  "**What happened**\n\n\n**What Coldworks would have seen (if you know)**\n\n\n**Repo (optional)**\n",
 );
 const STORY_ISSUE_URL = storyIssueUrl.toString();
 
@@ -57,105 +53,62 @@ export default function AboutPage() {
       <main className="mx-auto w-full max-w-5xl px-6">
         <section className="py-20 md:py-24">
           <p className="animate-rise panel inline-flex items-center gap-2 rounded-full px-3 py-1 font-mono text-xs text-muted-foreground">
-            <DougLogo size={14} /> about
+            <BrandMark size={14} /> about
           </p>
           <h1
             className="animate-rise font-heading mt-6 max-w-2xl text-5xl leading-[1.02] font-semibold tracking-tight md:text-6xl"
             style={{ animationDelay: "80ms" }}
           >
-            The dog <span className="text-molten">came first</span>.
+            Repeated judgment, <span className="text-molten">compiled</span>.
           </h1>
           <p
             className="animate-rise mt-6 max-w-lg text-lg leading-relaxed text-muted-foreground"
             style={{ animationDelay: "160ms" }}
           >
-            Doug the product is named after Doug the dog, not the other way
-            around. Here&rsquo;s how that happened, who built it, and how to
-            get involved.
+            Coldworks runs agent workflows and compiles the judgments they keep
+            repeating into deterministic, guarded code that you own.
           </p>
         </section>
 
         <section className="pb-16">
           <p className="lbl">
-            Origin
+            The first case
           </p>
           <h2 className="font-heading mt-4 max-w-2xl text-3xl leading-tight font-semibold tracking-tight md:text-4xl">
-            Saint Bernards have had one job for three centuries.
+            Most pull requests don&rsquo;t need a human.
           </h2>
           <div className="mt-6 grid gap-4 text-sm leading-relaxed text-muted-foreground md:max-w-2xl">
             <p>
-              Monks at the Great St Bernard Hospice, high in the Alps between
-              Switzerland and Italy, have bred the dogs since the 17th
-              century for exactly one task: find the traveler buried in the
-              snow, and bring help. They don&rsquo;t dig you out themselves.
-              They find you, and they get a person.
+              Coldworks reviews your pull requests, remembers what your team
+              decided, and turns the judgments it keeps repeating into checks
+              you own.
             </p>
             <p>
-              That&rsquo;s the whole shape of the product, too. Doug
-              doesn&rsquo;t fix your code and doesn&rsquo;t hold your merge —
-              it finds the pull request that&rsquo;s actually in trouble and
-              puts a human in front of it. Everything else clears.
+              Every pull request gets a verdict: cleared, or needs a reader.
+              Coldworks routes attention. It never blocks a merge, never
+              writes code, and publishes its own miss rate.
             </p>
             <p>
-              This Doug is a real dog, not a mascot invented for the pitch.
-              He mostly guards a couch. The metaphor is aspirational.
+              Judgments that come back the same every time become guarded,
+              tested checks. A maintainer signs each one, and it runs first in
+              your CI.
             </p>
           </div>
+        </section>
 
-          <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {PHOTOS.map((p) => (
-              <figure
-                key={p.src}
-                className="panel group overflow-hidden rounded-lg"
-              >
-                <img
-                  src={p.src}
-                  alt={p.alt}
-                  loading="lazy"
-                  className="aspect-square w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                />
-                <figcaption className="border-t border-border px-3 py-2 font-mono text-[11px] text-muted-foreground">
-                  {p.caption}
-                </figcaption>
-              </figure>
+        <section className="pb-16">
+          <p className="lbl">
+            Three rules, in writing
+          </p>
+          <div className="hairline-grid mt-6 rounded-lg md:grid-cols-3">
+            {RULES.map((r) => (
+              <div key={r.title} className="p-8">
+                <h3 className="font-heading text-xl font-semibold">{r.title}</h3>
+                <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                  {r.body}
+                </p>
+              </div>
             ))}
-          </div>
-        </section>
-
-        <section className="pb-16">
-          <p className="lbl">
-            Who&rsquo;s behind it
-          </p>
-          <h2 className="font-heading mt-4 max-w-2xl text-3xl leading-tight font-semibold tracking-tight md:text-4xl">
-            Built by one person, for now.
-          </h2>
-          {/* Draft bio — Andrew, edit or replace freely. Facts as given:
-              82nd Airborne Division, 19D cavalry scout, deployed to Sadr
-              City, Baghdad; then 4th Brigade Combat Team (Airborne), 25th
-              Infantry Division, signals intelligence analyst, deployed to
-              Afghanistan working with units on the Pakistan border; Purdue;
-              now a principal engineer in insurtech. */}
-          <div className="mt-6 grid gap-4 text-sm leading-relaxed text-muted-foreground md:max-w-2xl">
-            <p>
-              Andrew served first with the 82nd Airborne Division as a 19D
-              cavalry scout, deployed to Sadr City in Baghdad. He went on to
-              the 4th Brigade Combat Team (Airborne), 25th Infantry Division
-              as a signals intelligence analyst, deploying to Afghanistan
-              and working alongside units on the Pakistan border.
-            </p>
-            <p>
-              A scout and an intel analyst do the same job from opposite
-              ends: decide what deserves someone&rsquo;s attention, and let
-              the rest go. Getting that wrong in either direction costs
-              something.
-            </p>
-            <p>
-              He studied at Purdue afterward and works today as a principal
-              engineer in insurtech. Doug is a side project, built at night
-              on the same instinct — most pull requests don&rsquo;t need a
-              human, so find the ones that do, and say so honestly when
-              you&rsquo;re wrong.
-            </p>
           </div>
         </section>
 
@@ -164,18 +117,19 @@ export default function AboutPage() {
             Get involved
           </p>
           <h2 className="font-heading mt-4 max-w-2xl text-3xl leading-tight font-semibold tracking-tight md:text-4xl">
-            Three ways in.
+            Two ways in.
           </h2>
 
-          <div className="mt-10 grid gap-4 md:grid-cols-3">
+          <div className="mt-10 grid gap-4 md:grid-cols-2">
             <div className="panel flex flex-col rounded-lg p-8">
               <span className="text-coolant font-mono text-sm">01</span>
               <h3 className="font-heading mt-3 text-xl font-semibold">
                 Star it
               </h3>
               <p className="mt-3 grow text-sm leading-relaxed text-muted-foreground">
-                Doug is dogfooding on this repo. A star is the cheapest way
-                to say the live path is worth hardening for other installs.
+                Coldworks reviews its own pull requests on this repository. A
+                star is the cheapest way to say the live path is worth
+                hardening for other installs.
               </p>
               <a
                 href={GITHUB_REPO_URL}
@@ -193,19 +147,11 @@ export default function AboutPage() {
             <div className="panel flex flex-col rounded-lg p-8">
               <span className="text-coolant font-mono text-sm">02</span>
               <h3 className="font-heading mt-3 text-xl font-semibold">
-                Ask Doug something
-              </h3>
-              <DougFactButton className="mt-3" />
-            </div>
-
-            <div className="panel flex flex-col rounded-lg p-8">
-              <span className="text-coolant font-mono text-sm">03</span>
-              <h3 className="font-heading mt-3 text-xl font-semibold">
                 Tell us your story
               </h3>
               <p className="mt-3 grow text-sm leading-relaxed text-muted-foreground">
                 Had a PR that needed a human and didn&rsquo;t get one? Or one
-                Doug would have wrongly flagged? Open it as an issue —
+                Coldworks would have wrongly flagged? Open it as an issue —
                 it&rsquo;s the fastest way to argue with the scoring.
               </p>
               <a

@@ -6,7 +6,7 @@ import { DocsPageHeader, IC, P, UL } from "@/components/docs/prose";
 export const metadata = {
   title: "The cleared band",
   description:
-    "The cleared band is Doug's real sales claim: defect density among the PRs he clears, not the ones he flags.",
+    "The cleared band is the real sales claim: defect density among the PRs Coldworks clears, not the ones it flags.",
 };
 
 export default function ClearedBandPage() {
@@ -16,14 +16,14 @@ export default function ClearedBandPage() {
         prose={
           <>
             <DocsPageHeader
-              kicker="Doug reviews · Concepts"
+              kicker="Reviews · Concepts"
               title="The cleared band"
               status="available"
             >
               Capture describes the flagged band. The product actually sells
               the{" "}
               <b>other one</b>:
-              &ldquo;auto-merge what Doug cleared&rdquo; is a claim about
+              &ldquo;auto-merge what Coldworks cleared&rdquo; is a claim about
               defect density <i>among cleared PRs</i>.
             </DocsPageHeader>
 
@@ -42,7 +42,7 @@ export default function ClearedBandPage() {
                 cleared PRs are safer than average
               </li>
               <li>
-                <IC>density_lift = 1</IC> — Doug&rsquo;s clearance is
+                <IC>density_lift = 1</IC> — the clearance is
                 worthless; you&rsquo;re merging blind
               </li>
             </UL>

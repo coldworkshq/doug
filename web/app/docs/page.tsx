@@ -12,29 +12,30 @@ import { AUDIT_PREVIEW_LABEL, DOCS_SECTIONS } from "@/lib/docs-nav";
 export const metadata = {
   title: "Coldworks docs",
   description:
-    "Documentation for Coldworks: Doug, the risk-routed code reviewer, and the audit that reads your agents' traces on your own machine.",
+    "Documentation for Coldworks: Reviews, the risk-routed code reviewer, and the audit that reads your agents' traces on your own machine.",
 };
 
-const [DOUG, AUDIT] = DOCS_SECTIONS;
+const [REVIEWS, AUDIT] = DOCS_SECTIONS;
 
-/** The one overview. Doug's introduction and the audit's overview are its
+/** The one overview. The Reviews introduction and the audit's overview are its
  *  two halves, each under the anchor its sidebar section links to
  *  (lib/docs-nav.ts); /docs/audit redirects to the second. A claim in either
  *  half is about that half: the audit's sentences say "the audit" or "these
- *  pages", never "Coldworks" or "these docs", because Doug's half describes a
- *  hosted service. */
+ *  pages", never "Coldworks" or "these docs", because the Reviews half
+ *  describes a hosted service. The Reviews heading answers #reviews and keeps
+ *  #doug-reviews, its fragment before the 2026-09-23 naming ruling. */
 export default function DocsOverviewPage() {
   return (
     <>
       <DocsPageHeader kicker="Documentation" title="Use AI to need less AI.">
-        These docs cover two parts of Coldworks: <b>Doug</b>, the reviewer, and{" "}
+        These docs cover two parts of Coldworks: <b>Reviews</b>, the reviewer, and{" "}
         <b>the audit</b>, which reads the traces your agents already produce. Each part says what
         works today and what does not exist yet.
       </DocsPageHeader>
 
       <Cards columns={2}>
-        <Card href={DOUG.href} title={DOUG.name} cta="Read the section">
-          Risk-routed code review for the agent era. He scores every pull request, clears the
+        <Card href={REVIEWS.href} title={REVIEWS.name} cta="Read the section">
+          Risk-routed code review for the agent era. It scores every pull request, clears the
           majority, and routes the risky few to a human.
         </Card>
         <Card href={AUDIT.href} title={AUDIT.name} cta="Read the section">
@@ -43,20 +44,21 @@ export default function DocsOverviewPage() {
         </Card>
       </Cards>
 
-      <H2 id="doug-reviews">Doug reviews</H2>
+      <H2 id="reviews" legacyId="doug-reviews">Reviews</H2>
       <P>
-        <b>Doug is risk-routed code review for the agent era.</b> He scores every pull request,
+        <b>Coldworks reviews pull requests: risk-routed code review for the agent era.</b> It
+        scores every pull request,
         clears the majority, and routes the risky few to a human — with evidence attached. Every
-        merge starts a clock against this repo&rsquo;s reverts. He never blocks a merge.
+        merge starts a clock against this repo&rsquo;s reverts. It never blocks a merge.
       </P>
       <P>
-        Watch Doug score its own pull requests on the <Link href="/queue">queue</Link>, read
+        Watch Coldworks score its own pull requests on the <Link href="/queue">queue</Link>, read
         the <Link href="/scoreboard">scoreboard</Link> (adjudicated and pending counters tick
         there now; <IC>miss_rate</IC> stays null until the pre-registered interval fires, and a
         count is not a rate). The GitHub App is dogfooding on this repository and is
         not a self-serve product for other orgs yet. The self-serve measurement tool is still
         the <b>backtest CLI</b>: replay your repo&rsquo;s merged history, label defect-inducing
-        PRs from revert anchors in git, and measure which PRs Doug would have routed. The report
+        PRs from revert anchors in git, and measure which PRs Coldworks would have routed. The report
         is the demo — and the same numbers we publish for ourselves.
       </P>
 
@@ -64,8 +66,8 @@ export default function DocsOverviewPage() {
         <Card href="/docs/quickstart" title="Quickstart" cta="Start here">
           Backtest any public repository in one command — no account, no server.
         </Card>
-        <Card href="/docs/what-doug-gets-wrong" title="What Doug gets wrong" cta="Honesty">
-          Doug reviews his own pull requests, and the team logs what he got wrong.
+        <Card href="/docs/what-reviews-get-wrong" title="What Coldworks gets wrong" cta="Honesty">
+          Coldworks reviews its own pull requests, and the team logs what it got wrong.
         </Card>
         <Card href="/docs/cli" title="CLI · doug-backtest" cta="Reference">
           Every flag, with examples, for the CLI that replays a repo&rsquo;s merged history.
@@ -73,12 +75,12 @@ export default function DocsOverviewPage() {
       </Cards>
 
       <Callout lead="Early preview.">
-        Doug is in active development. Everything marked <StatusBadge status="available" /> works
+        Coldworks is in active development. Everything marked <StatusBadge status="available" /> works
         today; things marked <StatusBadge status="preview" /> or <StatusBadge status="planned" />{" "}
         are described so you can see where this is going — not to pretend they exist.
       </Callout>
 
-      <CodeBlock title="The shape of Doug">
+      <CodeBlock title="The shape of Reviews">
         <Comment># 1 · replay history, honestly</Comment>
         {"\n"}
         <Bright>doug-backtest</Bright> <Str>your-org/your-repo</Str>
@@ -89,7 +91,7 @@ export default function DocsOverviewPage() {
         {"\n\n"}
         <Comment># 3 · ask before you write             [planned]</Comment>
         {"\n"}
-        <Fn>doug.ask</Fn>
+        <Fn>coldworks.ask</Fn>
         {"("}
         <Str>&quot;backfill NOT NULL on a hot table&quot;</Str>
         {")"}

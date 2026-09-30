@@ -236,7 +236,7 @@ export function FlagLineControl({
         </>,
         <>
           <p className={PROSE}>
-            One line for both scorers. Unset, Doug uses {defaults.reader.toFixed(2)} on deep reads and {defaults.fallback.toFixed(2)} when the reader didn&apos;t run.
+            One line for both scorers. Unset, Coldworks uses {defaults.reader.toFixed(2)} on deep reads and {defaults.fallback.toFixed(2)} when the reader didn&apos;t run.
             Applies to reviews from now on — past verdicts keep the line they were scored against, and open PRs keep their check until a new commit.
             {value !== null && value >= 0.9 && " Close to flag-nothing on the fallback scorer."}
           </p>
@@ -247,7 +247,7 @@ export function FlagLineControl({
               that surface has. */}
           {layout === "cell" && (
             <p className={PROSE}>
-              This is Doug&apos;s line for new reviews — the preview gear above only re-bands what&apos;s on screen.
+              This is the line Coldworks uses for new reviews — the preview gear above only re-bands what&apos;s on screen.
             </p>
           )}
         </>,
@@ -281,8 +281,8 @@ export function FlagLineControl({
            this control does: the toggle is now the only thing that decides,
            and saying otherwise would be the D8 dishonesty in reverse. */
         <p className={PROSE}>
-          On, Doug mirrors each verdict into one comment on the pull request and edits that same comment on every later review — it never adds a second one.
-          Off, Doug stops updating the comment; the last one it posted stays where it is.
+          On, Coldworks mirrors each verdict into one comment on the pull request and edits that same comment on every later review — it never adds a second one.
+          Off, Coldworks stops updating the comment; the last one it posted stays where it is.
         </p>,
       )}
 
@@ -310,19 +310,19 @@ export function FlagLineControl({
            sentences, one per state, rather than one sentence that is wrong
            half the time. */
         <p className={PROSE}>
-          On, Doug sends the diff to the reader and scores what it finds. Off, no diff leaves your repository — Doug scores on
+          On, Coldworks sends the diff to the reader and scores what it finds. Off, no diff leaves your repository — Coldworks scores on
           structural signals alone and records no findings.
           {value === null &&
             (deepRead
-              ? ` Because this repository has no flag line of its own, turning the read off also moves the line Doug bands against, from ${defaults.reader.toFixed(2)} to ${defaults.fallback.toFixed(2)} — so Doug asks for a human less often, not just differently.`
-              : ` Because this repository has no flag line of its own, the line Doug bands against moved with the read: it is banding at ${defaults.fallback.toFixed(2)} rather than ${defaults.reader.toFixed(2)}, so it is asking for a human less often here than it would with the read on.`)}
+              ? ` Because this repository has no flag line of its own, turning the read off also moves the line Coldworks bands against, from ${defaults.reader.toFixed(2)} to ${defaults.fallback.toFixed(2)} — so Coldworks asks for a human less often, not just differently.`
+              : ` Because this repository has no flag line of its own, the line Coldworks bands against moved with the read: it is banding at ${defaults.fallback.toFixed(2)} rather than ${defaults.reader.toFixed(2)}, so it is asking for a human less often here than it would with the read on.`)}
         </p>,
       )}
 
       {/* Not attached to any one control: it is true of all three, and the
           third rule Doug is built on. Route, never block. */}
       <p className={PROSE}>
-        Doug routes either way: every pull request still gets a check run, and no setting here blocks a merge.
+        Coldworks routes either way: every pull request still gets a check run, and no setting here blocks a merge.
       </p>
     </div>
   );

@@ -15,10 +15,28 @@ export default function ChangelogPage() {
       <DocsArticle
         prose={
           <>
-            <DocsPageHeader kicker="Doug reviews · Meta" title="Changelog" />
+            <DocsPageHeader kicker="Reviews · Meta" title="Changelog" />
 
             <ParamsTable
               rows={[
+                {
+                  name: "2026-09-30",
+                  description: (
+                    <>
+                      Doug is now Coldworks. The pull request reviewer is a
+                      capability of Coldworks, called Reviews, and its three
+                      rules carry over word for word. <IC>/doug</IC> moved to{" "}
+                      <IC>/reviews</IC>, and{" "}
+                      <IC>/docs/what-doug-gets-wrong</IC> to{" "}
+                      <IC>/docs/what-reviews-get-wrong</IC>; both old paths
+                      redirect permanently. Names you type keep the old one:
+                      the <IC>coldworkshq/doug</IC> repository, the{" "}
+                      <IC>doug-backtest</IC> command, and API key and header
+                      names. The check run and the PR comment rename
+                      separately.
+                    </>
+                  ),
+                },
                 {
                   name: "2026-08-23",
                   description: (
@@ -26,10 +44,10 @@ export default function ChangelogPage() {
                       Settings get a page. <IC>/dashboard/settings</IC> lists
                       every connected repository with its flag line, its PR
                       comment toggle and a new deep read toggle, and the site
-                      header links to the dashboard. Deep read off means Doug
+                      header links to the dashboard. Deep read off means Coldworks
                       scores that repository on structural signals alone — no
                       diff leaves it. On a repository with no flag line of its
-                      own that also moves the line Doug bands against, from the
+                      own that also moves the line Coldworks bands against, from the
                       deep-read default to the fallback one, so it asks for a
                       human less often rather than merely differently.
                     </>
@@ -54,12 +72,12 @@ export default function ChangelogPage() {
                   name: "2026-08-21",
                   description: (
                     <>
-                      Doug stops forgetting what he already said. When the
-                      code a finding cited is byte-unchanged in the next
-                      push, he carries that finding forward by construction
+                      Coldworks stops forgetting what it already said. When
+                      the code a finding cited is byte-unchanged in the next
+                      push, it carries that finding forward by construction
                       and reports it under{" "}
                       <IC>### Since &lt;sha&gt;</IC>, with a count of how many
-                      of his own earlier findings on untouched code he did not
+                      of its own earlier findings on untouched code it did not
                       mention again. Nothing is ever marked{" "}
                       <em>resolved</em>: evidence that code was edited is not
                       evidence it was fixed, and a sampled hand-check said so
@@ -72,7 +90,7 @@ export default function ChangelogPage() {
                   description: (
                     <>
                       The sticky PR comment finishes rolling out. It is on for
-                      every repository Doug reviews, and the per-repository
+                      every repository Coldworks reviews, and the per-repository
                       toggle beside the flag line is the only thing that turns
                       it off.
                     </>
@@ -82,7 +100,7 @@ export default function ChangelogPage() {
                   name: "2026-08-19",
                   description: (
                     <>
-                      Doug leaves one sticky comment on each reviewed PR that
+                      Coldworks leaves one sticky comment on each reviewed PR that
                       repeats its check run word for word, edited in place on
                       every push — on by default, opt-out per repository
                       beside the flag line.
@@ -122,7 +140,7 @@ export default function ChangelogPage() {
                   name: "2026-08",
                   description: (
                     <>
-                      Doug&rsquo;s own findings now get a durable disposition —
+                      The reviewer&rsquo;s own findings now get a durable disposition —
                       real / disproved / adjacent, plus whether anything changed
                       and which file settled it (
                       <IC>docs/findings-log.jsonl</IC>). Every row at the

@@ -8,9 +8,9 @@ import { applyThreshold, getQueue, type Reason } from "@/lib/api";
 /** Named as Doug's: the root metadata is the product's (ADR-0034); the
  *  queue and the scoreboard are the reviewer's own surfaces. */
 export const metadata: Metadata = {
-  title: "Queue — Doug reviews",
+  title: "Queue — Reviews",
   description:
-    "Doug's public review queue: every open pull request on the dogfood repository with its verdict and evidence. Part of Coldworks.",
+    "The public review queue: every open pull request on the dogfood repository with its verdict and evidence. Part of Coldworks.",
 };
 
 const PRESETS = [0.5, 0.62, 0.8];

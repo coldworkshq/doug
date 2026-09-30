@@ -157,7 +157,7 @@ const UNLOADABLE: Record<Failure, { route: string; heading: string; body: string
     route: "/prs",
     heading: "No receipt for this pull request.",
     body:
-      "Doug has no verdict and no merge recorded for it. A pull request that does not " +
+      "Coldworks has no verdict and no merge recorded for it. A pull request that does not " +
       "exist and one in a repository outside this space read identically here, on " +
       "purpose: the API answers both with the same code and the same body, so this " +
       "page cannot be used to find out whether someone else's repository exists.",
@@ -171,7 +171,7 @@ const UNLOADABLE: Record<Failure, { route: string; heading: string; body: string
   },
   unauthorized: {
     route: "/spaces",
-    heading: "Doug would not answer for this session.",
+    heading: "Coldworks would not answer for this session.",
     body:
       "The API declined it, and that one answer covers several different states: a " +
       "sign-in token it will not verify, no space selected yet, no installation bound " +
@@ -183,7 +183,7 @@ const UNLOADABLE: Record<Failure, { route: string; heading: string; body: string
   },
   unreachable: {
     route: "/prs",
-    heading: "Doug could not load this receipt.",
+    heading: "Coldworks could not load this receipt.",
     body:
       "There is no answer here this page can read. Whether the request reached the API " +
       "at all is not something this screen can tell — a dropped connection and a reply " +
@@ -274,7 +274,7 @@ function GapBanner({ gap }: { gap: VerdictGap }) {
         The latest verdict is not the one that governed publication.
       </span>
       <span className="break-words text-muted-foreground">
-        Verdict {gap.latestId} is Doug&apos;s most recent score. Verdict {gap.governingId} was
+        Verdict {gap.latestId} is the most recent score. Verdict {gap.governingId} was
         standing when {gap.mergeSha} merged, and is the one the publication rule selects for this
         pull request. Selected is not the same as counted — the published rate is computed over
         cleared-band verdicts only — so this says which verdict the rule picks here, not that the
@@ -413,13 +413,13 @@ function ReceiptDocument({ receipt }: { receipt: ReceiptResponse }) {
 
         <section className={BLOCK}>
           <h2 className={BLOCK_HEADING}>
-            Latest verdict <span>what Doug says now</span>
+            Latest verdict <span>what Coldworks says now</span>
           </h2>
           {/* Presence gate. The caption below renders either way, because the
               reason this can be absent — external reviews are excluded from
               it — is exactly what the caption explains. */}
           {receipt.latest_verdict === null ? (
-            <p className={EMPTY_NOTE}>No Doug verdict is recorded for this pull request.</p>
+            <p className={EMPTY_NOTE}>No verdict is recorded for this pull request.</p>
           ) : (
             <VerdictCard verdict={receipt.latest_verdict} />
           )}

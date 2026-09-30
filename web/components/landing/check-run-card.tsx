@@ -1,4 +1,4 @@
-import { DougLogo } from "@/components/doug-logo";
+import { BrandMark } from "@/components/brand-mark";
 import type { QueueItem, ScoreboardResponse } from "@/lib/api";
 
 /** The landing hero's object: a facsimile of the neutral `Doug` check run,
@@ -15,6 +15,12 @@ import type { QueueItem, ScoreboardResponse } from "@/lib/api";
  *  cell) are copied from check_run.py rather than paraphrased, so the hero
  *  cannot promise something the real check does not say. When they change
  *  there, change them here.
+ *
+ *  That is also why this card still says "Doug" after the 2026-09-23 naming
+ *  ruling retired the name from the site's own copy: the check run's name
+ *  and its summary sentences are what GitHub shows today, and a facsimile
+ *  that renamed them first would show a check nobody will see. They change
+ *  with check_run.py (doug#372), in the same change.
  *
  *  Server component; no state, no client JS. */
 
@@ -71,7 +77,7 @@ export function CheckRunCard({
       {/* Check-run chrome: what GitHub puts around the summary. */}
       <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3 font-mono text-xs">
         <span className="flex min-w-0 items-center gap-2 text-foreground">
-          <DougLogo size={16} />
+          <BrandMark size={16} />
           <span className="font-medium">Doug</span>
           <span className="text-muted-foreground">· check run</span>
         </span>

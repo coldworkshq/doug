@@ -17,7 +17,7 @@ export default function ReportPage() {
         prose={
           <>
             <DocsPageHeader
-              kicker="Doug reviews · Reference"
+              kicker="Reviews · Reference"
               title="The report"
               status="available"
             >

@@ -43,6 +43,17 @@ test("each section's href lands on its own half of the overview", () => {
   }
 });
 
+test("the retired #doug-reviews fragment still lands on the Reviews heading", async () => {
+  // The section was "Doug reviews" at /docs#doug-reviews until the 2026-09-23
+  // naming ruling. A fragment never reaches the server, so no redirect in
+  // next.config.ts can move it: the old id has to live on the page, on the
+  // same heading the new one names, or every saved link lands at the top.
+  assert.equal(DOCS_SECTIONS[0].href, "/docs#reviews");
+  assert.match(overview, /<H2 id="reviews" legacyId="doug-reviews">Reviews<\/H2>/);
+  const prose = await readFile(new URL("../components/docs/prose.tsx", import.meta.url), "utf8");
+  assert.match(prose, /<span id=\{legacyId\}/, "H2 drops its legacyId instead of rendering it");
+});
+
 test("every page's pager is told its own route — a copied page would page from someone else's place", async () => {
   // DocsPager takes the current href as a string each page types. A page
   // copied from another that keeps the other's href shows the wrong neighbors,
@@ -71,12 +82,12 @@ test("every page's header states its nav status, and the audit's pages say what 
   }
 });
 
-test("the overview opens reading order; Doug reviews comes before the audit, in the door's order", () => {
+test("the overview opens reading order; Reviews comes before the audit, in the door's order", () => {
   const flat = flattenDocsNav();
   assert.equal(flat[0], DOCS_HOME);
   assert.equal(adjacentDocsPages("/docs").prev, null);
   assert.equal(adjacentDocsPages("/docs").next?.href, "/docs/quickstart");
-  assert.deepEqual(DOCS_SECTIONS.map((s) => s.name), ["Doug reviews", "The audit"]);
+  assert.deepEqual(DOCS_SECTIONS.map((s) => s.name), ["Reviews", "The audit"]);
 });
 
 test("the audit overview is not a page of its own — it is part of /docs", () => {
@@ -91,7 +102,7 @@ test("the last page has no next — prev/next must not wrap around to the overvi
 });
 
 test("prev/next cross a group boundary and a section boundary, not just neighbors within one group", () => {
-  assert.equal(adjacentDocsPages("/docs/what-doug-gets-wrong").next?.href, "/docs/cli");
+  assert.equal(adjacentDocsPages("/docs/what-reviews-get-wrong").next?.href, "/docs/cli");
   assert.equal(adjacentDocsPages("/docs/changelog").next?.href, "/docs/audit/quickstart");
   assert.equal(adjacentDocsPages("/docs/audit/quickstart").prev?.href, "/docs/changelog");
 });
@@ -134,13 +145,13 @@ test("a query for a section's name finds every page of it, even where the title 
 
 test("a query reaches both sections, so a shared title is not hidden in one", () => {
   const sections = filterDocsNav("quickstart");
-  assert.deepEqual(sections.map((s) => s.name), ["Doug reviews", "The audit"]);
+  assert.deepEqual(sections.map((s) => s.name), ["Reviews", "The audit"]);
 });
 
 test("a group or section with zero surviving matches is dropped, not rendered empty", () => {
   const sections = filterDocsNav("changelog");
   assert.equal(sections.length, 1);
-  assert.equal(sections[0].name, "Doug reviews");
+  assert.equal(sections[0].name, "Reviews");
   assert.deepEqual(sections[0].groups.map((g) => g.name), ["Meta"]);
 });
 
@@ -156,26 +167,26 @@ test("Coming up is preview or planned only — an available page there would be 
 });
 
 test("a page's sidebar tag says only what its section does not already say", () => {
-  const [doug, audit] = DOCS_SECTIONS;
-  assert.equal(sidebarTag({ href: "/docs/quickstart", title: "Quickstart", status: "available" }, doug), null);
-  assert.equal(sidebarTag({ href: "/docs/mcp", title: "MCP", status: "planned" }, doug), "planned");
+  const [reviews, audit] = DOCS_SECTIONS;
+  assert.equal(sidebarTag({ href: "/docs/quickstart", title: "Quickstart", status: "available" }, reviews), null);
+  assert.equal(sidebarTag({ href: "/docs/mcp", title: "MCP", status: "planned" }, reviews), "planned");
   assert.equal(sidebarTag({ href: "/docs/audit/cli", title: "The audit CLI", status: "preview" }, audit), null);
   // A page that differs from its preview section is tagged, in either direction.
   assert.equal(sidebarTag({ href: "/docs/x", title: "X", status: "available" }, audit), "available");
   assert.equal(sidebarTag({ title: "The audit report", upcoming: true }, audit), "soon");
-  assert.equal(sidebarTag({ href: "/docs/changelog", title: "Changelog" }, doug), null);
+  assert.equal(sidebarTag({ href: "/docs/changelog", title: "Changelog" }, reviews), null);
 });
 
 test("a page's section is found by its href; the overview belongs to none", () => {
   assert.equal(docsSectionOf("/docs/audit/cli")?.name, "The audit");
-  assert.equal(docsSectionOf("/docs/changelog")?.name, "Doug reviews");
+  assert.equal(docsSectionOf("/docs/changelog")?.name, "Reviews");
   assert.equal(docsSectionOf("/docs"), null);
   assert.equal(docsSectionOf("/docs/nonexistent"), null);
 });
 
 test("the collapsed sidebar names the section, because two sections each have a Quickstart", () => {
   assert.equal(docsPageLabel("/docs"), "Overview");
-  assert.equal(docsPageLabel("/docs/quickstart"), "Doug reviews · Quickstart");
+  assert.equal(docsPageLabel("/docs/quickstart"), "Reviews · Quickstart");
   assert.equal(docsPageLabel("/docs/audit/quickstart"), "The audit · Quickstart");
   assert.equal(docsPageLabel("/docs/nonexistent"), null);
 });

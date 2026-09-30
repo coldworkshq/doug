@@ -476,7 +476,7 @@ function LensBanner({
             so a bare "31 rows re-banded" here would be the one number on the
             page that let an operator read a fraction of the scope as the
             whole of it. */}
-        Doug scored these against its own line —{" "}
+        Coldworks scored these against its own line —{" "}
         {atCap ? (
           <>
             <b className="font-medium text-foreground">{reband}</b> of the latest{" "}
@@ -1156,7 +1156,7 @@ function Evidence({
       </div>
 
       <div className={BLOCK}>
-        <h3 className={BLOCK_HEADING}>What Doug did <span>review job</span></h3>
+        <h3 className={BLOCK_HEADING}>What Coldworks did <span>review job</span></h3>
         <RunSpine run={detail} />
       </div>
 
@@ -1225,7 +1225,7 @@ function ScopeExpired({ connections }: { connections: RepositoryConnection[] }) 
       <p className={`mono inline-block text-[10px] ${ROUTE}`}>/spaces</p>
       <h1 className={EMPTY_HEADING}>Sign back in to refresh this.</h1>
       <p className={EMPTY_BODY}>
-        Doug still has your connection. What expired is the repository scope
+        Coldworks still has your connection. What expired is the repository scope
         GitHub granted when you signed in — it lasts eight hours, and only a new
         sign-in can renew it.
       </p>
@@ -1265,7 +1265,7 @@ function NoConnection({
     <main className={EMPTY_PAGE}>
       <p className={`mono inline-block text-[10px] ${ROUTE}`}>/account</p>
       <h1 className={EMPTY_HEADING}>{userLabel}, you&apos;re in.</h1>
-      <p className={EMPTY_BODY}>{"You're in. Connect GitHub only when you want Doug to review repositories."}</p>
+      <p className={EMPTY_BODY}>{"You're in. Connect GitHub only when you want Coldworks to review repositories."}</p>
       {/* This screen otherwise claims "you have not connected anything", which
           is only true if Doug asked. When the sign-in derivation failed it never
           asked, and `lib/entitlements.ts` leaves this signal precisely so the
@@ -1273,7 +1273,7 @@ function NoConnection({
           rebuild — the claim is the point, the CSS module it used is gone.) */}
       {scopeUnconfirmed && (
         <p className={`${EMPTY_NOTE} mt-4`}>
-          Doug could not confirm your repositories when you signed in, so this page may be
+          Coldworks could not confirm your repositories when you signed in, so this page may be
           missing connections you already have. Try again in a moment, or sign out and back in.
         </p>
       )}
@@ -1309,7 +1309,7 @@ const LEDGER_UNREACHABLE: Record<
   // was declined, not which one it was.
   declined: {
     route: "/spaces",
-    heading: "Doug would not answer for this session.",
+    heading: "Coldworks would not answer for this session.",
     body:
       "The API declined it, and that one answer covers several different states: a " +
       "sign-in token it will not verify, no space selected yet, no installation bound " +
@@ -1338,9 +1338,9 @@ const LEDGER_UNREACHABLE: Record<
   // claim the typed arms exist to refuse.
   unreachable: {
     route: "/spaces",
-    heading: "Doug could not load your connected spaces.",
+    heading: "Coldworks could not load your connected spaces.",
     body:
-      "The request did not come back with an answer Doug can use. That is all this " +
+      "The request did not come back with an answer Coldworks can use. That is all this " +
       "page knows — it is not a claim about your session, your connection, or your " +
       "repositories. Reloading in a moment is worth a try; the first request after an " +
       "idle period waits on a container start.",
@@ -1681,7 +1681,7 @@ export default async function DashboardPage({
                     // covers nothing. Not the same as "no runs yet", which is a
                     // repository list with an empty ledger and still has rows.
                     <p className="mono rounded-[5px] border border-border px-2.5 py-9 text-center text-[12.5px] text-muted-foreground">
-                      This space has no repositories. Connect one to give Doug something to review.
+                      This space has no repositories. Connect one to give Coldworks something to review.
                     </p>
                   ) : (
                     <>
