@@ -23,8 +23,8 @@ const nextConfig: NextConfig = {
   // The door is the Coldworks landing page, served verbatim out of public/
   // as the self-contained document it has always been (its fonts, styles and
   // lattice are inlined), rewritten onto the bare origin so the address that
-  // gets pasted into an email is the origin itself. ADR-0034. Doug's own
-  // page lives one link in, at /doug.
+  // gets pasted into an email is the origin itself. ADR-0034. The reviewer's
+  // own page lives one link in, at /reviews.
   //
   // A rewrite, not a redirect, and after the app's own routes: `/` has no
   // page, so the rewrite fires. Nothing is rewritten under /docs: every docs
@@ -80,6 +80,15 @@ const nextConfig: NextConfig = {
   // redirects to what replaced it. After the www rules, so they only ever
   // answer the apex. Temporary: the docs' shape is new, and a 308 is cached
   // with no expiry. No rule for the old stylesheet: no page links it.
+  //
+  // The two name-bearing paths moved on 2026-09-30, when the 2026-09-23
+  // naming ruling retired "Doug" as a public name: /doug is /reviews, and
+  // /docs/what-doug-gets-wrong is /docs/what-reviews-get-wrong. Both are
+  // PERMANENT, unlike the audit's forwards, because the old URLs are written
+  // where nobody edits them again: every sticky comment the API has posted
+  // links the docs path (api/doug/pr_comment.py `_DOCS_PATH`), and the check
+  // runs, llms.txt copies, and shared links name /doug. A 308 cached forever
+  // is the point. Pinned by lib/public-surface.test.mjs.
   async redirects() {
     const www = [{ type: "host" as const, value: "www\\.coldworks\\.dev" }];
     return [
@@ -114,6 +123,8 @@ const nextConfig: NextConfig = {
         destination: "/docs/audit/:page",
         permanent: false,
       },
+      { source: "/doug", destination: "/reviews", permanent: true },
+      { source: "/docs/what-doug-gets-wrong", destination: "/docs/what-reviews-get-wrong", permanent: true },
     ];
   },
   async headers() {

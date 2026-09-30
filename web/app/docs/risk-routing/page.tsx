@@ -6,7 +6,7 @@ import { DocsPageHeader, P, UL } from "@/components/docs/prose";
 export const metadata = {
   title: "Risk routing",
   description:
-    "How Doug's capture curve, static hotspot segments, and the mandatory size-only baseline work.",
+    "How the capture curve, static hotspot segments, and the mandatory size-only baseline work.",
 };
 
 export default function RiskRoutingPage() {
@@ -16,11 +16,11 @@ export default function RiskRoutingPage() {
         prose={
           <>
             <DocsPageHeader
-              kicker="Doug reviews · Concepts"
+              kicker="Reviews · Concepts"
               title="Risk routing"
               status="available"
             >
-              Doug&rsquo;s core claim is a{" "}
+              The core claim is a{" "}
               <b>capture curve</b>:
               reading only the top-scored <i>N</i>% of PRs (the
               &ldquo;budget&rdquo;), what share of defect-inducing PRs land
@@ -54,8 +54,8 @@ export default function RiskRoutingPage() {
                 <b>
                   size-only baseline
                 </b>{" "}
-                — every report shows it; if Doug can&rsquo;t beat
-                &ldquo;biggest diff first,&rdquo; you should not pay for Doug
+                — every report shows it; if Coldworks can&rsquo;t beat
+                &ldquo;biggest diff first,&rdquo; you should not pay for Coldworks
               </li>
             </UL>
           </>

@@ -22,11 +22,11 @@ import {
 } from "@/lib/session-api";
 
 const SETUP_ERROR = "That repository connection is not available.";
-const FLAG_LINE_ERROR = "Doug could not save that flag line.";
+const FLAG_LINE_ERROR = "Coldworks could not save that flag line.";
 const FLAG_LINE_REAUTH =
   "Your session's repository access has aged out — sign in again to change settings.";
-const PR_COMMENT_ERROR = "Doug could not save that PR comment setting.";
-const DEEP_READ_ERROR = "Doug could not save that deep read setting.";
+const PR_COMMENT_ERROR = "Coldworks could not save that PR comment setting.";
+const DEEP_READ_ERROR = "Coldworks could not save that deep read setting.";
 
 /** Every route that renders the per-repository controls.
  *

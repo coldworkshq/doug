@@ -5,7 +5,7 @@ import { DocsArticle } from "@/components/docs/docs-article";
 import { DocsPageHeader, H2, IC, UL } from "@/components/docs/prose";
 
 export const metadata = {
-  title: "Quickstart · Doug reviews",
+  title: "Quickstart · Reviews",
   description:
     "Backtest any public repository in one command — no account, no server.",
 };
@@ -25,7 +25,7 @@ export default function QuickstartPage() {
         prose={
           <>
             <DocsPageHeader
-              kicker="Doug reviews · Getting started"
+              kicker="Reviews · Getting started"
               title="Quickstart"
               status="available"
             >
@@ -60,7 +60,7 @@ export default function QuickstartPage() {
                 <IC>.backtest-cache/</IC>)
               </li>
               <li>
-                Replays Doug&rsquo;s scoring over the window and prints
+                Replays the review scoring over the window and prints
                 capture, cleared-band, per-rule, and holdout tables
               </li>
             </UL>

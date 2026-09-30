@@ -41,9 +41,16 @@ export function DocsPageHeader({
 }
 
 /** A section heading. Its scroll margin clears the sticky top bar, so an
- *  anchor link (/docs#the-audit) lands on the heading, not under the bar. */
-export function H2({ id, children }: { id?: string; children: ReactNode }) {
-  return <h2 id={id}>{children}</h2>;
+ *  anchor link (/docs#the-audit) lands on the heading, not under the bar.
+ *  `legacyId` keeps a retired fragment resolving to the same heading: a
+ *  fragment never reaches the server, so no redirect can move it. */
+export function H2({ id, legacyId, children }: { id?: string; legacyId?: string; children: ReactNode }) {
+  return (
+    <h2 id={id}>
+      {legacyId ? <span id={legacyId} className={styles.legacyAnchor} aria-hidden="true" /> : null}
+      {children}
+    </h2>
+  );
 }
 
 export function H3({ id, children }: { id?: string; children: ReactNode }) {

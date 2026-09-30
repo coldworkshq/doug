@@ -17,7 +17,7 @@ export default function RestApiPage() {
         prose={
           <>
             <DocsPageHeader
-              kicker="Doug reviews · Coming up"
+              kicker="Reviews · Coming up"
               title="REST API"
               status="preview"
             >

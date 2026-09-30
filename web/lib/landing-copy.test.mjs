@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-// Doug's page lives at /doug since ADR-0034; the door at / is public/landing.html.
-const page = await readFile(new URL("../app/doug/page.tsx", import.meta.url), "utf8");
+// The reviewer's page lives at /reviews (it was /doug from ADR-0034 until the
+// 2026-09-23 naming ruling); the door at / is public/landing.html.
+const page = await readFile(new URL("../app/reviews/page.tsx", import.meta.url), "utf8");
 
 test("landing copy does not imply a cross-repo result we have not measured", () => {
   assert.equal(page.includes("repos like yours"), false);
@@ -19,6 +20,7 @@ test("landing copy does not use learns as a marketing verb", () => {
   // experience.md: counts and dates, never verbs of ability. "Others learn
   // what reviewers say" is about incumbents and stays.
   assert.equal(/title:\s*"Learns /.test(page), false);
+  assert.equal(page.includes("Coldworks learns what production did"), false);
   assert.equal(page.includes("Doug learns what production did"), false);
 });
 

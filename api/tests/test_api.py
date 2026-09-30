@@ -63,6 +63,26 @@ def test_healthz():
     assert r.json()["ok"] is True
 
 
+def test_openapi_shows_the_public_name_and_keeps_the_typed_ones():
+    # The 2026-09-23 naming ruling retired "Doug" as a public name, and the
+    # public /openapi.json shows `info.title` to anyone who reads the API
+    # (doug#375). The same ruling keeps every name a client types or parses:
+    # renaming the token header would break every integration and the
+    # console, so the document must still advertise it under its old name.
+    r = client.get("/openapi.json")
+    assert r.status_code == 200
+    doc = r.json()
+    assert doc["info"]["title"] == "Coldworks"
+    headers = {
+        p["name"].lower()
+        for op in doc["paths"].values()
+        for spec in op.values()
+        for p in spec.get("parameters", [])
+        if p.get("in") == "header"
+    }
+    assert "x-doug-token" in headers
+
+
 class _ExamplePackRouteService:
     def list_cohorts(self):
         return ({"cohort_id": "c1", "availability": {"status": "empty"}},)

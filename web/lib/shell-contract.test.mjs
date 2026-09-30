@@ -11,14 +11,14 @@ import { existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [landing, config, rail, slots, overview, guards, dougPage, signIn, header, memory, workspace, sidebar, pager, docsNav, receipt, queue, scoreboard, adr34, adr19, adr06, gcp, topBar] = await Promise.all([
+const [landing, config, rail, slots, overview, guards, reviewsPage, signIn, header, memory, workspace, sidebar, pager, docsNav, receipt, queue, scoreboard, adr34, adr19, adr06, gcp, topBar] = await Promise.all([
   readFile(new URL("../public/landing.html", import.meta.url), "utf8"),
   readFile(new URL("../next.config.ts", import.meta.url), "utf8"),
   readFile(new URL("../components/dashboard-rail.tsx", import.meta.url), "utf8"),
   readFile(new URL("../components/overview-slots.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/dashboard/overview/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/dashboard/guards/page.tsx", import.meta.url), "utf8"),
-  readFile(new URL("../app/doug/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/reviews/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/sign-in/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/dashboard/memory/page.tsx", import.meta.url), "utf8"),
@@ -36,14 +36,14 @@ const [landing, config, rail, slots, overview, guards, dougPage, signIn, header,
   readFile(new URL("../components/docs/docs-top-bar.tsx", import.meta.url), "utf8"),
 ]);
 
-test("the door is the Coldworks landing, served by a rewrite, with Doug's page one link in", () => {
+test("the door is the Coldworks landing, served by a rewrite, with the reviewer's page one link in", () => {
   // verify_registry_surface.sh criterion 10, moved here with the landing.
   assert.match(landing, /Use AI to/);
   assert.match(landing, /href="\/sign-in"/);
   assert.match(landing, /href="\/dashboard\/overview"/);
   assert.match(config, /\{ source: "\/", destination: "\/landing\.html" \}/);
   assert.equal(existsSync(new URL("../app/page.tsx", import.meta.url)), false, "a page at / would shadow the rewrite");
-  assert.match(dougPage, /export const metadata/);
+  assert.match(reviewsPage, /export const metadata/);
   assert.match(signIn, /returnTo: "\/dashboard\/overview"/);
 });
 
@@ -83,12 +83,12 @@ test("the rail is Overview, Reviews, Repositories, Memory, Guards, in that order
   assert.ok(positions.every((p) => p !== -1), "every rail entry is present");
   for (let i = 1; i < positions.length; i++) assert.ok(positions[i] > positions[i - 1], order[i]);
   assert.match(rail, /Coldworks\s*<span/);
-  assert.equal(rail.includes("DougLogo"), false);
+  assert.equal(rail.includes("BrandMark"), false);
   assert.match(rail, /aria-current=\{section === "overview" \? "page" : undefined\}/);
   assert.match(rail, /aria-current=\{section === "guards" \? "page" : undefined\}/);
 });
 
-test("the published miss rate is one click from Reviews and from Doug's page", () => {
+test("the published miss rate is one click from Reviews and from the reviewer's page", () => {
   // The scoreboard link sits in the Reviews row: the same wrapper element
   // holds both links, as siblings, never one nested in the other.
   const rowStart = rail.lastIndexOf("<div", rail.indexOf("Reviews</Link>"));
@@ -97,8 +97,8 @@ test("the published miss rate is one click from Reviews and from Doug's page", (
   assert.match(row, /Reviews<\/Link>/);
   assert.match(row, /href="\/scoreboard"/);
   assert.equal(/<Link[^>]*>[^<]*<Link/.test(rail), false, "a link nested in a link");
-  assert.match(dougPage, /href="\/scoreboard"/);
-  // And from the door's own Doug section.
+  assert.match(reviewsPage, /href="\/scoreboard"/);
+  // And from the door's own Reviews section.
   assert.match(landing, /published on the scoreboard/);
 });
 
@@ -155,12 +155,18 @@ test("every workspace entry lands on the Overview, and the receipt returns into 
   assert.match(receipt, /href="\/dashboard\/overview"/);
   assert.match(receipt, /← reviews/);
   assert.equal(receipt.includes("← runs"), false);
-  assert.equal(receipt.includes("DougLogo"), false);
+  assert.equal(receipt.includes("BrandMark"), false);
 });
 
-test("Doug's public surfaces carry their own names under the product's root metadata", () => {
-  assert.match(queue, /title: "Queue — Doug reviews"/);
-  assert.match(scoreboard, /title: "Scoreboard — Doug reviews"/);
+test("the reviewer's public surfaces carry their own names under the product's root metadata", () => {
+  // "Reviews", not "Doug reviews": the 2026-09-23 naming ruling made
+  // Coldworks the only public name, and the reviewer a capability of it.
+  assert.match(queue, /title: "Queue — Reviews"/);
+  assert.match(scoreboard, /title: "Scoreboard — Reviews"/);
+  for (const [name, source] of [["queue", queue], ["scoreboard", scoreboard]]) {
+    const meta = source.slice(source.indexOf("export const metadata"), source.indexOf("};", source.indexOf("export const metadata")));
+    assert.equal(/Doug/.test(meta), false, `${name}'s metadata still names Doug`);
+  }
 });
 
 test("the docs are one site: the audit is a section of /docs, never a document with its own chrome", () => {
@@ -234,9 +240,10 @@ test("ADR-0034 amends ADR-0019 and ADR-0006, and both are marked on both sides",
 });
 
 test("the public header wears the door's nav and the Coldworks wordmark", () => {
-  assert.match(header, /label: "Doug reviews"/);
+  assert.match(header, /label: "Reviews"/);
+  assert.equal(header.includes('label: "Doug reviews"'), false);
   assert.match(header, /Coldworks\s*<\/Link>/);
-  assert.equal(header.includes("DougLogo"), false);
+  assert.equal(header.includes("BrandMark"), false);
 });
 
 test("every nav target is distinct and exists on the door", () => {

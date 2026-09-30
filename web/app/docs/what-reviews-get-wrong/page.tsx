@@ -5,29 +5,32 @@ import { DocsArticle } from "@/components/docs/docs-article";
 import { DocsPageHeader, P, UL } from "@/components/docs/prose";
 
 export const metadata = {
-  title: "What Doug gets wrong",
+  title: "What Coldworks gets wrong",
   description:
-    "Doug reviews his own pull requests, and the team logs what he got wrong — disposition, not just a tally.",
+    "Coldworks reviews its own pull requests, and the team logs what it got wrong — disposition, not just a tally.",
 };
 
-export default function WhatDougGetsWrongPage() {
+/** Served at /docs/what-doug-gets-wrong until the 2026-09-23 naming ruling;
+ *  every sticky comment links that path, so next.config.ts redirects it here
+ *  permanently. */
+export default function WhatReviewsGetWrongPage() {
   return (
     <>
       <DocsArticle
         prose={
           <>
             <DocsPageHeader
-              kicker="Doug reviews · Honesty"
-              title="What Doug gets wrong"
+              kicker="Reviews · Honesty"
+              title="What Coldworks gets wrong"
               status="available"
             >
-              Doug reviews every pull request in his own repository, and we
-              write down what he got wrong.{" "}
+              Coldworks reviews every pull request in its own repository, and
+              we write down what it got wrong.{" "}
               <b>
                 Just under a third of prospective findings are disproved by
-                code he wasn&rsquo;t shown
+                code it wasn&rsquo;t shown
               </b>{" "}
-              — he reads a diff, not a repository, and he does not reliably
+              — it reads a diff, not a repository, and it does not reliably
               distinguish what the diff <i>proves</i> from what it merely{" "}
               <i>permits</i>.
             </DocsPageHeader>
@@ -60,7 +63,7 @@ export default function WhatDougGetsWrongPage() {
               exists is a fact about the repo. Re-reading the diff confirms the
               finding every time and proves nothing — the check and the error
               are the same observation. In that particular case the linter had
-              already answered it, green, before Doug ever spoke.
+              already answered it, green, before Coldworks ever spoke.
             </P>
 
             <P>
@@ -76,7 +79,7 @@ export default function WhatDougGetsWrongPage() {
               Two axes, deliberately, because one column loses the cases that
               matter. A true finding that changed nothing is a re-report of
               something the code already says. A false finding that changed
-              something found a real gap by the wrong route. Doug&rsquo;s
+              something found a real gap by the wrong route. The reviewer&rsquo;s
               strongest mode is <i>“this code does not justify itself”</i> — and
               a single score would grade that as failure.
             </P>
@@ -128,7 +131,7 @@ export default function WhatDougGetsWrongPage() {
           </CodeBlock>
         }
       />
-      <DocsPager currentHref="/docs/what-doug-gets-wrong" />
+      <DocsPager currentHref="/docs/what-reviews-get-wrong" />
     </>
   );
 }

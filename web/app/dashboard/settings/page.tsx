@@ -115,7 +115,7 @@ export default async function SettingsPage() {
           // installation is real and bound, it just covers nothing Doug can
           // see. The remedy is on GitHub, so the link goes there.
           <p className="mt-8 max-w-[620px] text-sm text-muted-foreground">
-            This space has no repositories Doug can see yet. Add some to the installation from{" "}
+            This space has no repositories Coldworks can see yet. Add some to the installation from{" "}
             <Link href="/install/start" prefetch={false} className="text-foreground underline underline-offset-[3px]">
               Connect repositories
             </Link>

@@ -3,13 +3,13 @@
  *  each guessing at page order independently.
  *
  *  One site. Everything under /docs is a page of it: the overview at /docs,
- *  then one section per thing a reader can run, in the door's order (Doug
- *  reviews, then the audit). Until 2026-09-15 the audit's pages were static
+ *  then one section per thing a reader can run, in the door's order
+ *  (Reviews, then the audit). Until 2026-09-15 the audit's pages were static
  *  documents with their own chrome, linked from here as external anchors;
  *  they are routes in this shell now, and the audit's overview is the
  *  second half of /docs (next.config.ts redirects /docs/audit there).
  *
- *  The shape of Doug's section came from the GitHub Pages docs this app
+ *  The shape of the Reviews section came from the GitHub Pages docs this app
  *  replaced; that site was retired to a redirect on 2026-08-24, so this tree
  *  is the only docs structure there is.
  */
@@ -56,8 +56,12 @@ export const AUDIT_PREVIEW_LABEL = "Design preview · coldworks-audit has not sh
 
 export const DOCS_SECTIONS: readonly DocsSection[] = [
   {
-    name: "Doug reviews",
-    href: "/docs#doug-reviews",
+    name: "Reviews",
+    // The overview's heading answers #reviews, and keeps an empty anchor at
+    // #doug-reviews, the fragment before the 2026-09-23 naming ruling, so a
+    // saved link still lands on the section (a fragment never reaches the
+    // server, so no redirect can carry it).
+    href: "/docs#reviews",
     groups: [
       {
         name: "Getting started",
@@ -69,7 +73,7 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
           { href: "/docs/risk-routing", title: "Risk routing", status: "available" },
           { href: "/docs/defect-labels", title: "Defect labels", status: "available" },
           { href: "/docs/cleared-band", title: "The cleared band", status: "available" },
-          { href: "/docs/what-doug-gets-wrong", title: "What Doug gets wrong", status: "available" },
+          { href: "/docs/what-reviews-get-wrong", title: "What Coldworks gets wrong", status: "available" },
         ],
       },
       {

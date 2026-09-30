@@ -18,7 +18,7 @@ export default function McpPatternGardenPage() {
         prose={
           <>
             <DocsPageHeader
-              kicker="Doug reviews · Coming up"
+              kicker="Reviews · Coming up"
               title="MCP · Pattern Garden"
               status="planned"
             >
@@ -45,7 +45,7 @@ export default function McpPatternGardenPage() {
             <ParamsTable
               rows={[
                 {
-                  name: "doug.ask",
+                  name: "coldworks.ask",
                   meta: "tool · planned",
                   description: (
                     <>
@@ -56,7 +56,7 @@ export default function McpPatternGardenPage() {
                   ),
                 },
                 {
-                  name: "doug.check",
+                  name: "coldworks.check",
                   meta: "tool · planned",
                   description:
                     "Submit a draft diff; get back any losing-variant matches with the cross-repo record attached.",
@@ -74,7 +74,7 @@ export default function McpPatternGardenPage() {
         }
         examples={
           <CodeBlock title="MCP · PLANNED">
-            <Fn>doug.ask</Fn>
+            <Fn>coldworks.ask</Fn>
             {"("}
             <Str>&quot;backfill a NOT NULL column on a hot table&quot;</Str>
             {")"}

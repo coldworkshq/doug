@@ -4,24 +4,25 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { GITHUB_REPO_URL } from "@/lib/links";
 
 /** The door's own nav, in its order (public/landing.html): the three
- *  moments, the audit, the docs. Doug reviews is a real page; Memory and
+ *  moments, the audit, the docs. Reviews is a real page (/reviews, which
+ *  /doug redirects to since the 2026-09-23 naming ruling); Memory and
  *  Guards are their own cards on the door (#memory, #guards) until their
  *  workspace screens are the thing a stranger should see first. Every
  *  target is distinct: two labels on one anchor is one dead label. ADR-0034.
  *  Exported for the docs' top bar (components/docs/docs-top-bar.tsx), which
  *  wears these links in the docs' look rather than keeping a copy. */
 export const NAV_LINKS = [
-  { href: "/doug", label: "Doug reviews" },
+  { href: "/reviews", label: "Reviews" },
   { href: "/#memory", label: "Memory" },
   { href: "/#guards", label: "Guards" },
   { href: "/#audit", label: "The audit" },
-  // The published miss rate is the trust instrument (Doug's third rule); it
+  // The published miss rate is the trust instrument (the third rule); it
   // stays one click from every public page, not only from the ledger.
   { href: "/scoreboard", label: "Scoreboard" },
   { href: "/docs", label: "Docs" },
 ] as const;
 
-/** Floating site chrome for the public marketing surface (/doug,
+/** Floating site chrome for the public marketing surface (/reviews,
  *  /scoreboard, /queue, /about). /docs wears the same NAV_LINKS in its own
  *  top bar (components/docs/docs-top-bar.tsx).
  *
@@ -62,7 +63,7 @@ export const NAV_LINKS = [
  *  onto a near-white bar and vanished. This line re-substitutes the token
  *  where the scope can reach it.
  *
- *  Order is the door's: Doug reviews, Memory, Guards, The audit, then the
+ *  Order is the door's: Reviews, Memory, Guards, The audit, then the
  *  Scoreboard (the published miss rate, one click from everywhere), Docs; then
  *  GitHub as the escape hatch to source and About last. The Dashboard link
  *  that used to lead this bar is gone because Sign in now does its job: a

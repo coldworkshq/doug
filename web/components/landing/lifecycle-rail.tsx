@@ -19,7 +19,7 @@ const STATIONS = [
   },
   {
     mark: "read",
-    title: "Doug reads the diff",
+    title: "Coldworks reads the diff",
     body: "Title, files, patch — capped at 100k characters in a fixed order, and the check says when the cut fell short. No author, no dates.",
   },
   {

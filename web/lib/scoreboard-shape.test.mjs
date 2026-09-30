@@ -45,13 +45,13 @@ test("rejects null, which JSON.parse produces for a bare null body", () => {
   assert.equal(isScoreboardResponse(null), false);
 });
 
-test("the public header links to /scoreboard, and Doug's page links to /queue, distinct from it", async () => {
+test("the public header links to /scoreboard, and the reviewer's page links to /queue, distinct from it", async () => {
   // ADR-0034: the header wears the door's nav plus the scoreboard, the trust
-  // instrument. The queue is Doug's own public surface, one link in.
+  // instrument. The queue is the reviewer's own public surface, one link in.
   const { readFile } = await import("node:fs/promises");
   const header = await readFile(new URL("../components/site-header.tsx", import.meta.url), "utf8");
-  const doug = await readFile(new URL("../app/doug/page.tsx", import.meta.url), "utf8");
+  const reviews = await readFile(new URL("../app/reviews/page.tsx", import.meta.url), "utf8");
   assert.match(header, /href: "\/scoreboard"/);
-  assert.match(doug, /href="\/queue"/);
-  assert.match(doug, /href="\/scoreboard"/);
+  assert.match(reviews, /href="\/queue"/);
+  assert.match(reviews, /href="\/scoreboard"/);
 });

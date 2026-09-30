@@ -285,7 +285,7 @@ footer canvas{width:44px;height:44px}
   <div class="navin">
     <a class="wm" href="#top"><i><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b></i>Coldworks</a>
     <div class="navlinks">
-      <a href="#moments">Doug reviews</a>
+      <a href="#moments">Reviews</a>
       <a href="#moments">Memory</a>
       <a href="#moments">Guards</a>
       <a href="#audit">The audit</a>
@@ -296,7 +296,7 @@ footer canvas{width:44px;height:44px}
       <!-- Sign-in returns to the workspace (ADR-0034). The door itself is
            public: everything on this page reads no session. -->
       <a class="btn btn-ghost btn-sm" href="/sign-in">Log in</a>
-      <a class="btn btn-primary btn-sm" href="https://github.com/apps/dougs-review">Install Doug</a>
+      <a class="btn btn-primary btn-sm" href="https://github.com/apps/dougs-review">Install Coldworks</a>
     </div>
   </div>
 </nav>
@@ -307,9 +307,9 @@ footer canvas{width:44px;height:44px}
     <div class="herogrid">
       <div>
         <h1>Use AI to need less AI.</h1>
-        <p class="sub">Coldworks reviews your pull requests, remembers what your team decided, and turns the judgments it keeps repeating into checks you own. One product, free to start. The reviewer, Doug, installs on its own today; the rest carries its state on this page.</p>
+        <p class="sub">Coldworks reviews your pull requests, remembers what your team decided, and turns the judgments it keeps repeating into checks you own. One product, free to start. The reviewer installs on its own today; the rest carries its state on this page.</p>
         <div class="cta">
-          <a class="btn btn-primary btn-lg" href="https://github.com/apps/dougs-review">Install Doug on GitHub</a>
+          <a class="btn btn-primary btn-lg" href="https://github.com/apps/dougs-review">Install Coldworks on GitHub</a>
           <a class="btn btn-ghost btn-lg" href="/docs">Read the docs</a>
           <span class="note">A GitHub App on your repositories. No sales call, no credit card, nothing to schedule.</span>
         </div>
@@ -325,7 +325,7 @@ footer canvas{width:44px;height:44px}
 
   <section class="doorsec" id="workspace">
     <div class="doorhead">
-      <div><h2>One workspace.</h2><p>Your organization on GitHub is the workspace. Doug reviews, Memory, and Guards each work from the record of what your team decides.</p></div>
+      <div><h2>One workspace.</h2><p>Your organization on GitHub is the workspace. Reviews, Memory, and Guards each work from the record of what your team decides.</p></div>
       <a class="btn btn-ghost" href="/dashboard/overview">Open the workspace</a>
     </div>
     <a class="frame" href="/dashboard/overview" aria-label="Illustrative workspace; opens your workspace">
@@ -334,7 +334,7 @@ footer canvas{width:44px;height:44px}
         <div class="rail">
           <div class="org"><i>A</i>acme</div>
           <span class="on" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;font-size:14px;font-weight:500"><s style="background:var(--ink)"></s>Overview</span>
-          <span style="display:flex;align-items:center;gap:10px;padding:8px 10px;font-size:14px;color:var(--ink2)"><s style="background:var(--hot)"></s>Doug reviews</span>
+          <span style="display:flex;align-items:center;gap:10px;padding:8px 10px;font-size:14px;color:var(--ink2)"><s style="background:var(--hot)"></s>Reviews</span>
           <span style="display:flex;align-items:center;gap:10px;padding:8px 10px;font-size:14px;color:var(--ink2)"><s style="background:var(--warm)"></s>Memory</span>
           <span style="display:flex;align-items:center;gap:10px;padding:8px 10px;font-size:14px;color:var(--ink2)"><s style="background:var(--cool)"></s>Guards</span>
           <div class="grp">Organization</div>
@@ -382,8 +382,8 @@ footer canvas{width:44px;height:44px}
     <p class="lede">Before an agent starts, at the pull request, and every week after. The same decision answers all three, so a settled question stays settled and the model is asked less each time. Coldworks is not a check your agents call. What is decided is read before they start, what is compiled runs instead of them, and what is left goes to the model, with a receipt.</p>
     <div class="moments">
       <div class="moment m1" id="memory"><small>Before the agent starts <span class="tag designed">designed</span></small><b>Memory</b><p>Agents ask over MCP whether a question is already decided and get a cited answer, or "no recorded ruling," which means unknown, not approved.</p></div>
-      <div class="moment m2"><small>At the pull request <span class="tag built">shipping</span></small><b>Doug reviews</b><p>Every pull request gets a verdict: cleared, or needs a reader. Doug reads the record before it reads the diff, routes attention, and never blocks. He works alone, too.</p></div>
-      <div class="moment m3" id="guards"><small>Every week after <span class="tag gated">built in the engine, not yet at the pull request</span></small><b>Guards</b><p>Judgments that come back the same every time become guarded, tested checks. A maintainer signs each one, it runs first in your CI, and Doug stops asking the model about it.</p></div>
+      <div class="moment m2"><small>At the pull request <span class="tag built">shipping</span></small><b>Reviews</b><p>Every pull request gets a verdict: cleared, or needs a reader. Coldworks reads the record before it reads the diff, routes attention, and never blocks. It works alone, too.</p></div>
+      <div class="moment m3" id="guards"><small>Every week after <span class="tag gated">built in the engine, not yet at the pull request</span></small><b>Guards</b><p>Judgments that come back the same every time become guarded, tested checks. A maintainer signs each one, it runs first in your CI, and Coldworks stops asking the model about it.</p></div>
     </div>
 
     <div class="bands">
@@ -413,15 +413,15 @@ footer canvas{width:44px;height:44px}
 
       <div class="band flip" id="reviews">
         <div class="copy">
-          <div class="pname"><span class="mark" style="background:var(--hot-soft)"><svg viewBox="0 0 24 24" fill="none" stroke="var(--hot)" stroke-width="2.2" stroke-linecap="round"><path d="M4 12l5 5L20 6"/></svg></span><div><b>Doug reviews</b><small>At the pull request</small></div></div>
-          <h3>Most pull requests don't need a human. Doug works out which ones do.</h3>
-          <p>Every pull request gets a verdict: cleared, or needs a reader. Doug routes attention. It never blocks a merge, never writes code, and publishes its own miss rate.</p>
+          <div class="pname"><span class="mark" style="background:var(--hot-soft)"><svg viewBox="0 0 24 24" fill="none" stroke="var(--hot)" stroke-width="2.2" stroke-linecap="round"><path d="M4 12l5 5L20 6"/></svg></span><div><b>Reviews</b><small>At the pull request</small></div></div>
+          <h3>Most pull requests don't need a human. Coldworks works out which ones do.</h3>
+          <p>Every pull request gets a verdict: cleared, or needs a reader. Coldworks routes attention. It never blocks a merge, never writes code, and publishes its own miss rate.</p>
           <ul>
             <li>Runs on your own model keys, or on the free deterministic tier with no model at all.</li>
             <li>Reads the record first. A change that contradicts a settled decision is routed to the person who owns it.</li>
             <li>Every verdict is recorded with its evidence, which is what the guards learn from.</li>
           </ul>
-          <div class="free"><a class="btn btn-primary" href="https://github.com/apps/dougs-review">Install just Doug</a><em>Free on any repository. Public source: <a href="https://github.com/coldworkshq/doug" style="color:var(--cool)">coldworkshq/doug</a>.</em></div>
+          <div class="free"><a class="btn btn-primary" href="https://github.com/apps/dougs-review">Install just Reviews</a><em>Free on any repository. Public source: <a href="https://github.com/coldworkshq/doug" style="color:var(--cool)">coldworkshq/doug</a>.</em></div>
         </div>
         <div class="vig">
           <div class="vig-hd"><b>acme/platform</b> #1839 · Move billing webhooks to the new queue</div>
@@ -450,9 +450,9 @@ footer canvas{width:44px;height:44px}
         <div class="vig">
           <div class="vig-hd"><b>Guards</b> · acme · 14 signed, 3 waiting</div>
           <div class="vig-bd gcard">
-            <div class="guard"><div class="gh"><b>0412</b><span>Retry loops are bounded and jittered</span><small>signed by maya · Aug 4</small></div><div class="sub">Subtracts: Doug no longer reads retry-policy diffs. <em>212 pull requests a week, 0 deopts.</em></div></div>
+            <div class="guard"><div class="gh"><b>0412</b><span>Retry loops are bounded and jittered</span><small>signed by maya · Aug 4</small></div><div class="sub">Subtracts: Coldworks no longer reads retry-policy diffs. <em>212 pull requests a week, 0 deopts.</em></div></div>
             <div class="guard"><div class="gh"><b>0418</b><span>Migration has a matching down step</span><small>waiting for a signature</small></div><div class="sub">61 sealed cases, 0 disagreements, 2 nearby-safe neighbors held. <em>Would subtract migration diffs from the model's charter.</em></div></div>
-            <div class="guard"><div class="gh"><b>0402</b><span>Tenant id is never nullable</span><small>unproven</small></div><div class="sub">Two nearby-safe cases are indistinguishable from violations. <em>Stays with the model, and Doug says so.</em></div></div>
+            <div class="guard"><div class="gh"><b>0402</b><span>Tenant id is never nullable</span><small>unproven</small></div><div class="sub">Two nearby-safe cases are indistinguishable from violations. <em>Stays with the model, and Coldworks says so.</em></div></div>
           </div>
         </div>
       </div>
@@ -461,7 +461,7 @@ footer canvas{width:44px;height:44px}
 
   <section class="s" id="audit">
     <h2>Running agents you didn't write? Start with the audit.</h2>
-    <p class="lede">The same machinery that compiles Doug's verdicts reads the traces of any agent you run. Export them, run one command on your own machine, and see which judgments repeat. Nothing is uploaded, and there is no account.</p>
+    <p class="lede">The same machinery that compiles review verdicts reads the traces of any agent you run. Export them, run one command on your own machine, and see which judgments repeat. Nothing is uploaded, and there is no account.</p>
     <div class="band" style="border-top:none;padding-top:40px">
       <div class="copy">
         <div class="pname"><span class="mark" style="background:var(--cool-soft)"><svg viewBox="0 0 24 24" fill="none" stroke="var(--cool)" stroke-width="2.2" stroke-linecap="round"><path d="M4 17l6-6 4 4 6-8"/></svg></span><div><b>The Coldworks audit</b><small>For teams with a real inference bill</small></div></div>
@@ -502,9 +502,9 @@ ledger   ./.coldworks/audit/ledger.jsonl</div>
     <p class="lede">The order is the order the record is built in. Each step's output is the next one's input, and the loop closes back on the first.</p>
     <div class="loop">
       <div class="step"><div class="n">1</div><div class="who"><s style="background:var(--warm)"></s>Memory</div><h4>What merges becomes the record of what was decided.</h4><p>Agents read it over MCP before they start, so settled questions stay settled.</p></div>
-      <div class="step"><div class="n">2</div><div class="who"><s style="background:var(--hot)"></s>Doug reviews</div><h4>Every pull request gets a verdict, with its evidence.</h4><p>Cleared or needs a reader. Each verdict is a recorded judgment, not a comment that scrolls away.</p></div>
+      <div class="step"><div class="n">2</div><div class="who"><s style="background:var(--hot)"></s>Reviews</div><h4>Every pull request gets a verdict, with its evidence.</h4><p>Cleared or needs a reader. Each verdict is a recorded judgment, not a comment that scrolls away.</p></div>
       <div class="step"><div class="n">3</div><div class="who"><s style="background:var(--cool)"></s>Guards</div><h4>Verdicts that repeat are compiled and proven.</h4><p>Each candidate is replayed against sealed history. A maintainer signs it, or it stays unproven.</p></div>
-      <div class="step"><div class="n">4</div><div class="who"><s style="background:var(--ink)"></s>Your CI</div><h4>Guards run first. The model is asked less.</h4><p>Doug and your agents skip what a guard already settled. Next week's verdicts start from here.</p></div>
+      <div class="step"><div class="n">4</div><div class="who"><s style="background:var(--ink)"></s>Your CI</div><h4>Guards run first. The model is asked less.</h4><p>Reviews and your agents skip what a guard already settled. Next week's verdicts start from here.</p></div>
     </div>
     <div class="tline">
       <span>Week 1 &nbsp;<b>T = 1.00</b></span>
@@ -513,10 +513,10 @@ ledger   ./.coldworks/audit/ledger.jsonl</div>
     </div>
     <p class="tnote">T is the share of decisions a model still makes. The rest is plain code that calls no model and holds no tools, and the registry shows what the model still decides.</p>
     <div class="rules">
-      <div class="rule"><b>Route, never block.</b><p>The pull request proceeds either way. Doug only decides who has to look.</p></div>
-      <div class="rule"><b>Never writes code.</b><p>The moment a reviewer authors, it owns the authorship. Doug doesn't.</p></div>
+      <div class="rule"><b>Route, never block.</b><p>The pull request proceeds either way. Coldworks only decides who has to look.</p></div>
+      <div class="rule"><b>Never writes code.</b><p>The moment a reviewer authors, it owns the authorship. Coldworks doesn't.</p></div>
       <div class="rule"><b>Nothing promotes itself.</b><p>Frequency alone never turns a judgment into code. A person signs, with a rollback path.</p></div>
-      <div class="rule"><b>Unproven is an answer.</b><p>When the evidence can't separate the cases, Doug says so and keeps that work with the model.</p></div>
+      <div class="rule"><b>Unproven is an answer.</b><p>When the evidence can't separate the cases, Coldworks says so and keeps that work with the model.</p></div>
       <div class="rule"><b>You own what's compiled.</b><p>Plain code, schemas, tests, fixtures, receipts. It runs without us.</p></div>
     </div>
   </section>
@@ -528,9 +528,9 @@ ledger   ./.coldworks/audit/ledger.jsonl</div>
       <div class="plan">
         <div class="pname"><div><b>Coldworks</b><small>Free</small></div></div>
         <div class="price">Free<small>per installation</small></div>
-        <div class="for">Doug reviews and memory for every repository you install on. Install just Doug if that is all you want.</div>
+        <div class="for">Reviews and memory for every repository you install on. Install just Reviews if that is all you want.</div>
         <ul><li>Deterministic verdict and check run, no model reads</li><li>Memory on public repositories, over MCP and search</li><li>Never blocks, never writes code</li><li>Published miss rate</li></ul>
-        <a class="btn btn-primary" href="https://github.com/apps/dougs-review">Install Doug on GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/apps/dougs-review">Install Coldworks on GitHub</a>
       </div>
       <div class="plan">
         <div class="pname"><div><b>Coldworks</b><small>Team</small></div></div>
@@ -556,7 +556,7 @@ ledger   ./.coldworks/audit/ledger.jsonl</div>
   <section class="close">
     <h2>Every week, a little colder.</h2>
     <div class="cta">
-      <a class="btn btn-primary btn-lg" href="https://github.com/apps/dougs-review">Install Doug on GitHub</a>
+      <a class="btn btn-primary btn-lg" href="https://github.com/apps/dougs-review">Install Coldworks on GitHub</a>
       <a class="btn btn-ghost btn-lg" href="/docs">Read the docs</a>
     </div>
   </section>
@@ -565,9 +565,9 @@ ledger   ./.coldworks/audit/ledger.jsonl</div>
 <footer>
   <div class="wrap fin">
     <div class="cols">
-      <div><b>Product</b><a href="#reviews">Doug reviews</a><a href="#moments">Memory</a><a href="#moments">Guards</a><a href="#audit">The audit</a></div>
+      <div><b>Product</b><a href="#reviews">Reviews</a><a href="#moments">Memory</a><a href="#moments">Guards</a><a href="#audit">The audit</a></div>
       <div><b>Company</b><a href="/docs">Docs</a><a href="/dashboard/overview">Workspace</a><a href="https://github.com/coldworkshq">GitHub</a></div>
-      <div><b>Doug</b><a href="https://github.com/coldworkshq/doug">Source</a><a href="https://github.com/apps/dougs-review">Install</a></div>
+      <div><b>Reviews</b><a href="https://github.com/coldworkshq/doug">Source</a><a href="https://github.com/apps/dougs-review">Install</a></div>
     </div>
     <div style="display:flex;align-items:center;gap:12px"><canvas id="footmark" width="44" height="44" aria-hidden="true"></canvas><span>Coldworks · coldworks.dev</span></div>
   </div>

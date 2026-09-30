@@ -667,16 +667,18 @@ test("nothing rendered anywhere paints a one-theme hex, except where that is the
   // because the file is inconvenient to fix. It is asserted to still earn it
   // below, so the exemption cannot outlive its reason.
   //
-  //  - The Doug mark is a logo. It carries its own white ground, which is why
-  //    it has always rendered correctly on the dark public pages, and a dog
-  //    that changes colour with the page is not a brand mark. Its colours are
-  //    the palette's molten and ink, written into the file (#214, ADR-0035).
+  //  - The Coldworks mark is a logo, and a mark that changes colour with the
+  //    page is not a brand mark. It replaced the Saint Bernard (the Doug mark)
+  //    when the 2026-09-23 naming ruling retired the name. Its cells are the
+  //    palette's molten, ember, and coolant, copied from coldworks/brand/ and
+  //    written into the file; every one is a saturated fill that reads on
+  //    either theme, which is why it needs no ground of its own.
   //
   // The docs' code panels were a second exemption until 2026-09-15. Their
   // fixed terminal ink moved into components/docs/docs.module.css with the
   // rest of the docs' look, so no component paints a literal colour to draw a
   // terminal, and the next test holds the panel to ink in both themes.
-  const BRAND_MARK = "components/doug-logo.tsx";
+  const BRAND_MARK = "components/brand-mark.tsx";
   const exempt = new Set([BRAND_MARK]);
 
   const offenders = [];
@@ -697,11 +699,16 @@ test("nothing rendered anywhere paints a one-theme hex, except where that is the
   // to put a file that simply failed.
   const mark = await readFile(new URL(BRAND_MARK, dir), "utf8");
   assert.match(mark, /<svg/, "the brand-mark exemption no longer points at a mark");
-  assert.match(
-    mark,
-    /fill="#fff"/,
-    "the mark no longer carries its own ground, so it can no longer claim to work on any surface",
-  );
+  // Its claim is that its colours ARE the palette's, fixed: the molten and
+  // coolant it paints are read from the stylesheet, never typed here.
+  const palette = tokens(await readFile(cssUrl, "utf8"), LIGHT);
+  for (const token of ["molten", "coolant"]) {
+    assert.ok(
+      mark.toLowerCase().includes(`fill="${palette[token]}"`),
+      `the mark no longer paints the palette's ${token} (${palette[token]}), so it no longer earns the exemption`,
+    );
+  }
+  assert.equal(/fill="(?:currentColor|var\()/.test(mark), false, "a themed fill in the mark is not a fixed brand colour");
 
   // And the walk actually walked. Without this, a rename that empties `sources`
   // turns the whole assertion into a tautology.
@@ -781,25 +788,34 @@ function decodePng(png) {
   return { ...hdr, px };
 }
 
-test("both tab icons are the Doug mark, in the palette's own molten and ink", async () => {
-  // THE .ico WAS create-next-app's. It landed in the scaffold commit and was
-  // never touched again, so every client that prefers /favicon.ico over the
-  // SVG — Safari, a link unfurl, a feed reader — showed Vercel's mark as
-  // Doug's, on a public product site, for as long as this app has existed.
-  // It is now rasterised FROM app/icon.svg at 16, 32 and 48, which is why
-  // this test can hold the two files to the same two colours.
+test("both tab icons are the Coldworks mark, in the palette's own molten and coolant", async () => {
+  // THE MARK CHANGED ON 2026-09-30. Both files were the Saint Bernard, in
+  // molten and ink, until the 2026-09-23 naming ruling retired the dog with
+  // the name. They are now coldworks/brand/'s generated assets, copied
+  // byte for byte: app/icon.svg is coldworks-favicon.svg (the 4x4 lattice the
+  // brand ships for 16-32px), and app/favicon.ico is brand/png/favicon.ico.
+  // The lattice reads molten top-left to coolant bottom-right, so those are
+  // the two colours both files must paint, and the SVG must be that lattice
+  // (sixteen cells), not a dog that happens to share a colour.
+  //
+  // BEFORE THAT, THE .ico WAS create-next-app's: every client that prefers
+  // /favicon.ico over the SVG — Safari, a link unfurl, a feed reader — showed
+  // Vercel's mark on a public product site. The brand's .ico is rasterised
+  // from the same lattice at 16, 32 and 48, which is why this test can hold
+  // the two files to the same two colours.
   //
   // The hexes are read from the stylesheet, never typed here: the mark's
   // exemption in the scan above says its colours ARE the palette's molten and
-  // ink, and this is where that claim is checked against the palette rather
+  // coolant, and this is where that claim is checked against the palette rather
   // than against a memory of it.
   const light = tokens(await readFile(cssUrl, "utf8"), LIGHT);
   const molten = light.molten;
-  const ink = light.foreground;
+  const coolant = light.coolant;
 
-  const svg = await readFile(new URL("../app/icon.svg", import.meta.url), "utf8");
+  const svg = (await readFile(new URL("../app/icon.svg", import.meta.url), "utf8")).toLowerCase();
   assert.ok(svg.includes(molten), `app/icon.svg does not paint the palette's molten (${molten})`);
-  assert.ok(svg.includes(ink), `app/icon.svg does not paint the palette's ink (${ink})`);
+  assert.ok(svg.includes(coolant), `app/icon.svg does not paint the palette's coolant (${coolant})`);
+  assert.equal((svg.match(/<rect /g) ?? []).length, 16, "app/icon.svg is not the 4x4 lattice");
 
   const ico = await readFile(new URL("../app/favicon.ico", import.meta.url));
   assert.equal(ico.readUInt16LE(2), 1, "app/favicon.ico is not an icon file");
@@ -825,7 +841,7 @@ test("both tab icons are the Doug mark, in the palette's own molten and ink", as
   }
   assert.ok(opaque > 500, `only ${opaque} opaque pixels — the icon decoded to nothing`);
   assert.ok(seen.has(molten), `the .ico paints no molten (${molten}); it is not the mark the SVG is`);
-  assert.ok(seen.has(ink), `the .ico paints no ink (${ink})`);
+  assert.ok(seen.has(coolant), `the .ico paints no coolant (${coolant})`);
 });
 
 const docsCssUrl = new URL("../components/docs/docs.module.css", import.meta.url);

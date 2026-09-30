@@ -193,6 +193,10 @@
   margin: 52px 0 12px; padding-top: 18px; border-top: 1px solid var(--cw-line2); scroll-margin-top: calc(var(--cw-top-h) + 11px);
 }
 .doc h3 { font-family: var(--cw-display); font-weight: 800; font-size: 17px; margin: 32px 0 8px; scroll-margin-top: calc(var(--cw-top-h) + 11px); }
+/* A retired fragment kept inside its heading (H2's legacyId). It sits below
+   the heading's 18px top padding, so it clears the bar by that much more to
+   land where the heading's own id lands. */
+.doc .legacyAnchor { scroll-margin-top: calc(var(--cw-top-h) + 29px); }
 .lede { font-size: 18.5px; line-height: 1.55; color: var(--cw-muted); margin-bottom: 8px; }
 .lede p + p { margin-top: 12px; }
 .lede b { color: var(--cw-fg); }

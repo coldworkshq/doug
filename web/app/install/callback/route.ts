@@ -75,7 +75,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (setupAction === "request") {
     return clearFlow(
       message(
-        "Doug is waiting for your organization admin to approve the repository connection.",
+        "Coldworks is waiting for your organization admin to approve the repository connection.",
       ),
     );
   }
@@ -189,16 +189,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // this page came back) rather than by a claim about who they are, which
     // this page is in no position to make.
     return html(
-      "<p>Only the GitHub account that installed Doug here can connect " +
+      "<p>Only the GitHub account that installed Coldworks here can connect " +
         "repositories, and this sign-in is not confirmed as that account. " +
-        "Your Doug account remains available.</p>" +
-        "<p>To connect this repository, sign out of Doug, sign in to GitHub as " +
-        "the account that installed Doug, and start the connection again. " +
-        "Signing in to Doug again without that step changes nothing, because " +
+        "Your Coldworks account remains available.</p>" +
+        "<p>To connect this repository, sign out of Coldworks, sign in to GitHub as " +
+        "the account that installed Coldworks, and start the connection again. " +
+        "Signing in to Coldworks again without that step changes nothing, because " +
         "it returns the same GitHub account. " +
         '<a href="/dashboard">Go to your dashboard</a> to sign out.</p>' +
         "<p>If you do that and this page comes back, the installation predates " +
-        "the record Doug checks and an operator has to connect it. Report it " +
+        "the record Coldworks checks and an operator has to connect it. Report it " +
         `at <a href="${GITHUB_REPO_URL}/issues">${GITHUB_REPO_SLUG} issues</a>.</p>`,
       403,
     );

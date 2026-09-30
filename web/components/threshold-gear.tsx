@@ -82,8 +82,8 @@ export function ThresholdGear({
           <div>
             <p className="mono text-[11px] font-medium text-foreground">Show needs-you at</p>
             <p className="mono mt-1 text-[10px] leading-[1.45] text-muted-foreground">
-              Re-bands this ledger from the scores Doug already recorded. It does not
-              change how Doug scores, and the run detail keeps its own recorded line.
+              Re-bands this ledger from the scores Coldworks already recorded. It does not
+              change how Coldworks scores, and the run detail keeps its own recorded line.
             </p>
           </div>
           <div className="flex items-center gap-3">

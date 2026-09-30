@@ -26,7 +26,7 @@ export function promptHashLine(verdict: Pick<ReceiptVerdict, "prompt_hash">): st
  *  is newest and would win the sort. So this is not "the newest verdict on
  *  this PR" — a human approval may well be newer. */
 export function latestVerdictCaption(): string {
-  return "Doug's most recent score. Excludes external reviews, which carry no read.";
+  return "The most recent score Coldworks gave. Excludes external reviews, which carry no read.";
 }
 
 export interface VerdictGap {

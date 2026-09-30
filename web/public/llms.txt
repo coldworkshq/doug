@@ -1,9 +1,12 @@
-# Doug — risk-routed code review
+# Coldworks — risk-routed code review
 
-> This host serves Coldworks at `/` (the product: Doug reviews, Memory,
-> Guards, and the local audit); Doug's own page is `/doug`. ADR-0034.
+> This host serves Coldworks at `/` (the product: Reviews, Memory, Guards,
+> and the local audit); the reviewer's own page is `/reviews`. ADR-0034.
+> Until 2026-09-30 the reviewer was called Doug; `/doug` and
+> `/docs/what-doug-gets-wrong` redirect permanently to `/reviews` and
+> `/docs/what-reviews-get-wrong`.
 >
-> Doug scores every pull request, clears the majority, and routes the risky
+> Coldworks scores every pull request, clears the majority, and routes the risky
 > few to a human with evidence attached. Never blocks a merge. Status: EARLY
 > PREVIEW — public surfaces: /queue, /scoreboard, hosted /docs, GitHub App
 > check runs. The self-serve measurement tool is the backtest CLI. Docs:
@@ -27,7 +30,7 @@ Requirements: Python 3.14+, uv, a GitHub token (env or `gh` CLI; unauthenticated
 
 A run: labels defect-inducing PRs from revert anchors in git history (dense, zero
 API quota), harvests merged PRs into a resumable local cache (.backtest-cache/),
-replays Doug's scoring, prints capture / cleared-band / per-rule / holdout tables.
+replays the review scoring, prints capture / cleared-band / per-rule / holdout tables.
 Tip: pass --before a few weeks back to dodge right-censoring (young PRs haven't
 had time to be reverted).
 
@@ -49,7 +52,7 @@ Harvests are checkpointed — kill and relaunch with the same command to resume.
 - Capture curve (AVAILABLE): reading only the top-scored N% of PRs (the budget),
   what share of defect-inducing PRs lands in that band? capture@budget is the
   headline routing metric; AUC summarizes across budgets. Every report includes a
-  size-only baseline — if Doug can't beat "biggest diff first," don't pay for Doug.
+  size-only baseline — if Coldworks can't beat "biggest diff first," don't pay for Coldworks.
 - Hotspots (AVAILABLE): path segments where the repo's own past defects cluster.
   Live App scoring uses static hotspot segments. Rolling-window learning is
   backtest holdout only (older half of the harvest). Measured on sentry: 2.34x
@@ -60,17 +63,17 @@ Harvests are checkpointed — kill and relaunch with the same command to resume.
   Known limits: reverts under-count defects; a small % of labels show timestamp
   anomalies under triage.
 - Per-repository settings (AVAILABLE): each connected repository carries its own
-  flag line (the score at which Doug asks for a human), a PR-comment toggle, and a
+  flag line (the score at which Coldworks asks for a human), a PR-comment toggle, and a
   deep-read toggle. They are on /dashboard/settings, and the flag line is ALSO on
   the repositories table, one column from the "needs you" count it decides — both
   surfaces are sanctioned and render one control against one API (ADR-0013,
   ADR-0019). Deep read off means that repository
   is scored on structural signals alone and no diff leaves it; on a repository with
-  no flag line of its own it also moves the line Doug bands against, so he asks for
+  no flag line of its own it also moves the line Coldworks bands against, so it asks for
   a human less often rather than merely differently.
 - Carrying findings forward (AVAILABLE): when the code a finding cited is
-  byte-unchanged in the next push, Doug carries that finding forward by
-  construction and reports it under "Since <sha>", with a count of his own earlier
+  byte-unchanged in the next push, Coldworks carries that finding forward by
+  construction and reports it under "Since <sha>", with a count of its own earlier
   findings on untouched code that the reader did not mention again. Nothing is
   marked resolved: evidence that code was edited is not evidence it was fixed.
 - Cleared band (AVAILABLE): the product claim is about CLEARED PRs. density_lift =
@@ -86,10 +89,10 @@ Printed tables: capture curve (doug/size-only/random + AUC), cleared band
 half, else honestly omitted). The JSON does not list missed PRs by number.
 JSON schema is early-preview; printed tables are the stable contract.
 
-## Doug's own findings (AVAILABLE — the log; there is no rate yet)
-Doug reviews every PR in his own repository and the dispositions are written down.
-Just under a third of prospective findings are disproved by code he wasn't
-shown: he reads a diff,
+## What Coldworks gets wrong (AVAILABLE — the log; there is no rate yet)
+Coldworks reviews every PR in its own repository and the dispositions are written down.
+Just under a third of prospective findings are disproved by code it wasn't
+shown: it reads a diff,
 not a repository, and does not reliably separate what a diff PROVES from what it
 merely PERMITS. Two recurring failure classes: (1) a conclusion drawn from an
 absence in the diff ("this name is used and no import was added" — it was already
@@ -105,7 +108,7 @@ real|disproved|adjacent ("adjacent" = wrong as stated, right about something
 nearby), whether anything in the codebase actually changed, and the file that
 settled it. Two axes because one loses the interesting cases — a true finding that
 changed nothing is a re-report; a false finding that changed something found a real
-gap by the wrong route. Doug's strongest mode is "this code does not justify
+gap by the wrong route. The reviewer's strongest mode is "this code does not justify
 itself," and a single score would grade that as failure.
 NO RATE IS PUBLISHED. Backfill is excluded from every rate by construction; the
 denominator is the prospective rows, scoped to one repository AND one
@@ -114,7 +117,7 @@ the diff reader writes `reader:` rows, the plan lane writes `deviation:` /
 `beyond-ticket:` / `missing-from-pr:` rows, and they are different vocabularies.
 SNAPSHOT, NOT A COUNTER — as of 2026-08-27 the log held 205 rows: 193
 prospective, 12 backfill, and 176 of the prospective rows were the reader on
-Doug's own repository (54 disproved, 85 real, 37 adjacent). The log grows
+the reviewer's own repository (54 disproved, 85 real, 37 adjacent). The log grows
 whenever a finding is settled, so do not quote those integers as current. The
 current figure comes from the log itself, which ships in the repo:
 `uv run python -m doug.findings_log rate --repo doug --rule-prefix reader:`.
@@ -126,8 +129,8 @@ true and worthless or false and load-bearing.
 An MCP server a coding agent queries BEFORE writing. Serves outcome-anchored
 patterns distilled from public-repo history: per problem shape, the solution
 variants people actually write, each carrying its revert record, survival record,
-and citations to real PRs. Planned tools: doug.ask (describe the change, get
-variants ranked by outcome evidence) and doug.check (submit a draft diff, get
+and citations to real PRs. Planned tools: coldworks.ask (describe the change, get
+variants ranked by outcome evidence) and coldworks.check (submit a draft diff, get
 losing-variant matches). Gated on evidence: patterns ship only after outcome
 deltas replicate across repos. First domain: schema migrations. No dates promised.
 
@@ -168,9 +171,9 @@ replication FAILED (grafana at random), which we publish rather than bury. The L
 diff-read result above is the piece that replicated across both repos. Those AUC
 numbers are the 2026-07 probe (ADR-0012), not a measurement of the shipped
 100k-char reader that is the live scoring path when DOUG_READER=1 and the
-reviewed repository has not turned its deep read off. Misses are published, not buried. Doug never
-blocks a merge. What Doug himself gets wrong is written down too (see "Doug's own
-findings") — including the fact that there is not yet enough of it to quote a rate.
+reviewed repository has not turned its deep read off. Misses are published, not buried. Coldworks never
+blocks a merge. What it gets wrong is written down too (see "What Coldworks
+gets wrong") — including the fact that there is not yet enough of it to quote a rate.
 A design for an agent review crew with a falsifier-adjudicated finding ledger was
 reviewed by six independent reviewers in 2026-08 and cut: four of six proposed
 "agent lenses" were checks that already ran or free platform features, and the

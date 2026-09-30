@@ -113,7 +113,7 @@ test("the settings page delegates every not-ready state to the ledger", () => {
   assert.match(settings, /if \(door\.state !== "runs"\) redirect\("\/dashboard"\);/);
   // …and it does not grow its own copy for them.
   assert.equal(settings.includes("LEDGER_UNREACHABLE"), false);
-  assert.equal(settings.includes("Doug could not load your connected spaces"), false);
+  assert.equal(settings.includes("Coldworks could not load your connected spaces"), false);
 
   // `redirect` works by throwing, so it must not sit inside the catch that
   // swallowed the read failure — there it would be caught and the page would

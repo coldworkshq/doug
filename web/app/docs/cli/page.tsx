@@ -100,7 +100,7 @@ export default function CliPage() {
         prose={
           <>
             <DocsPageHeader
-              kicker="Doug reviews · Reference"
+              kicker="Reviews · Reference"
               title="CLI · doug-backtest"
               status="available"
             >
