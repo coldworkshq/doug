@@ -1,5 +1,44 @@
 # HANDOFF — doug
 
+--- close-reviews-entry lane (2026-10-03 UTC): the Guards mapping deploys from a secret, and the door stops inviting installs ---
+
+State:    review — claimed under R5 at 2026-10-03T21:43Z on branch
+          claude/close-reviews-entry off origin/main 19b969c, worktree
+          .claude/worktrees/close-reviews-entry. No other doug PR was open.
+          deploy.yml's web Deploy step reads
+          secrets.DOUG_GUARDS_INSTALLATIONS; test_deploy_gcp.py pins
+          secrets. for the mapping and vars. for the registry URL (two
+          mutants killed: the mapping back to vars., the URL to secrets.).
+          landing.html has no App install link, says Reviews is not open to
+          new installs yet, and no longer claims a tier without model reads
+          or customer model keys; web/lib/door-installs.test.mjs pins both
+          (control on the old copy: 2 of 2 fail). `make check` 0;
+          tests/test_deploy_gcp.py 95 passed; the landing unit tests
+          (door-installs, shell-contract, public-surface, landing-copy) 63
+          passed. The full web workspace and integration suites were not
+          run locally.
+Next:     Founder, BEFORE the merge: create the Actions secret
+          DOUG_GUARDS_INSTALLATIONS with the variable's value (an unset
+          secret renders empty and maps nobody). Approve the copy, `gh pr
+          ready`, and merge when you can watch the deploy: api and web,
+          about 11 minutes. After it: the web job's log shows the key as
+          ***, and doug-web holds a non-empty value (length only).
+Blockers: The secret (founder, R11).
+Decisions this session:
+- The mapping moves to a secret and the registry URL stays a variable —
+  GitHub masks a secret in a public run log and prints a variable in full;
+  the URL is not sensitive — rejected: leaving the variable, which every
+  web deploy printed.
+- The door drops every App install link and says Reviews is not open to
+  new installs yet — rejected: keeping the links, which invite an install
+  the founder has not opened.
+- The model-read copy now matches the code: a model reads each pull
+  request by default, and a repository can turn that off — rejected:
+  keeping "no model reads" and "your own model keys", which no code backs.
+Pointers: .github/workflows/deploy.yml web Deploy step ·
+          api/tests/test_deploy_gcp.py _MASKED_IN_LOGS ·
+          web/public/landing.html · web/lib/door-installs.test.mjs
+
 --- reader-model lane (2026-09-25 UTC): MODEL moves to claude-opus-5-5, ADR-0037 ---
 
 State:    review — claimed under R5 at 2026-09-25T03:39Z on branch
