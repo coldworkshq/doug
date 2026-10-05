@@ -1163,7 +1163,19 @@ def reconcile_installation(installation_id: int, *, trigger: ingest.Trigger = "l
     installation.created handler, and that call must not have a blast
     radius past the one installation it names. reconcile_all is where the
     stalled-claim sweep belongs; see its docstring.
+
+    An installation outside the deploy's founder list is skipped before its
+    token is minted (ADR-0038): no GitHub call, no backlog of reads to
+    refuse, and one log line saying so. Its pull requests still reach
+    process_job through their own webhooks, which posts each one a neutral
+    "Not read". reconcile_all inherits the skip.
     """
+    if outside.refusal_for(installation_id) is not None:
+        print(
+            f"doug: reconcile skipped installation {installation_id} (not read: not open)",
+            file=sys.stderr,
+        )
+        return 0
     gh = app_auth.installation_client(installation_id)
     count = 0
     for repo_id, full_name in store.active_repos(installation_id):

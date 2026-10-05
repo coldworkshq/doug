@@ -3921,3 +3921,28 @@ def test_a_refusal_from_a_paid_path_lands_on_the_same_not_read(tmp_path, monkeyp
     assert check["title"] == "Not read: not open"
     assert _rows(url, store.verdicts) == []
     assert _job(url)["status"] == "done"
+
+
+def test_a_refused_installation_is_never_swept(tmp_path, monkeypatch, capsys, closing_gate):
+    """Neither the startup sweep nor installation.created's backlog sweep
+    mints a token for an installation outside the founder list (ADR-0038):
+    no GitHub call, and no backlog of reads to refuse one by one. Wrong
+    input: drop the skip and installation 2's token is minted."""
+    monkeypatch.setenv(closing_gate.FOUNDER_ENV, "1")
+    _installed(tmp_path, monkeypatch)
+    store.upsert_installation(2, "stranger", "User", "active")
+    store.set_installation_repos(2, [(43, "stranger/r")], replace=True)
+    minted: list[int] = []
+
+    def client(installation_id):
+        minted.append(installation_id)
+        return FakeListGH([_pull(number=installation_id)])
+
+    monkeypatch.setattr(worker.app_auth, "installation_client", client)
+
+    assert worker.reconcile_installation(2) == 0
+    assert minted == []
+    assert worker.reconcile_all() == 1
+    assert minted == [1]
+    err = capsys.readouterr().err
+    assert "doug: reconcile skipped installation 2 (not read: not open)" in err
