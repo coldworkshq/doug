@@ -3781,6 +3781,22 @@ def test_process_job_hands_the_authors_rulings_to_score_one(tmp_path, monkeypatc
 # real gate on, and expects it unchanged (R1).
 
 
+def _enqueue_and_claim() -> dict:
+    """JOB, enqueued and claimed, typed for the checker: JOB's values are
+    `int | str`, and claim() returns `dict | None`."""
+    ingest.enqueue(
+        installation_id=int(JOB["installation_id"]),
+        github_repo_id=int(JOB["github_repo_id"]),
+        repo_full_name=str(JOB["repo_full_name"]),
+        pr_number=int(JOB["pr_number"]),
+        base_sha=str(JOB["base_sha"]),
+        head_sha=str(JOB["head_sha"]),
+    )
+    job = ingest.claim()
+    assert job is not None
+    return job
+
+
 class _RecordingGitHub:
     """Every REST call a refused job could make, recorded by name."""
 
@@ -3825,9 +3841,8 @@ def test_a_refused_installation_is_fetched_nothing_and_shown_one_neutral_not_rea
     gh, reached = _wire_refusal(monkeypatch)
     upserts = _wire_pr_comment(monkeypatch)
     _enable_pr_comment(monkeypatch)
-    ingest.enqueue(**JOB)
 
-    assert worker.process_job(ingest.claim()) is None
+    assert worker.process_job(_enqueue_and_claim()) is None
 
     assert gh.calls == ["checks.create"]
     assert reached == []
@@ -3858,9 +3873,8 @@ def test_a_refused_installation_with_its_comment_off_gets_the_check_run_alone(
     gh, reached = _wire_refusal(monkeypatch)
     upserts = _wire_pr_comment(monkeypatch)
     _enable_pr_comment(monkeypatch, repo_setting=False)
-    ingest.enqueue(**JOB)
 
-    worker.process_job(ingest.claim())
+    worker.process_job(_enqueue_and_claim())
 
     assert gh.calls == ["checks.create"]
     assert reached == []
@@ -3890,9 +3904,8 @@ def test_a_founder_installation_reads_exactly_as_before(
     _db(tmp_path, monkeypatch)
     scopes: list[tuple[str, str]] = []
     posted = _wire(monkeypatch, scopes=scopes)
-    ingest.enqueue(**JOB)
 
-    assert worker.process_job(ingest.claim()) is not None
+    assert worker.process_job(_enqueue_and_claim()) is not None
 
     scope = f"installation:{JOB['installation_id']}"
     assert scopes == [("risk", scope), ("intent", scope)]
@@ -3913,9 +3926,8 @@ def test_a_refusal_from_a_paid_path_lands_on_the_same_not_read(tmp_path, monkeyp
         raise reader.OutsideRefused(outside.Reason.NOT_OPEN)
 
     monkeypatch.setattr(review, "score_one", _refusing_score_one)
-    ingest.enqueue(**JOB)
 
-    assert worker.process_job(ingest.claim()) is None
+    assert worker.process_job(_enqueue_and_claim()) is None
 
     (check,) = posted
     assert check["title"] == "Not read: not open"
