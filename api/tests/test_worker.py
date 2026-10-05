@@ -3558,7 +3558,7 @@ def test_an_early_return_still_clears_the_owed_marker(tmp_path, monkeypatch):
     _enable_pr_comment(monkeypatch)
     ingest.enqueue(**JOB)
 
-    def _short_circuit(gh, owner, name, job, summary, *, fresh):
+    def _short_circuit(gh, owner, name, job, summary, *, fresh, receipt=True):
         return "skipped:off"
 
     monkeypatch.setattr(worker, "_pr_comment_outcome", _short_circuit)
@@ -3771,3 +3771,131 @@ def test_process_job_hands_the_authors_rulings_to_score_one(tmp_path, monkeypatc
     # The repository's own deep-read setting, read in the same breath as the
     # line, so a repository that turned the reader off buys no rulings query.
     assert deep_read is repo_deep_read
+
+
+# --- ADR-0038: the closing gate ---------------------------------------------
+#
+# JOB's installation is not a founder under `closing_gate`'s list, so every
+# job here is refused unless a test puts it on the list. The founder test at
+# the end runs the same pipeline the rest of this file exercises, with the
+# real gate on, and expects it unchanged (R1).
+
+
+class _RecordingGitHub:
+    """Every REST call a refused job could make, recorded by name."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+        self.checks: list[dict] = []
+
+        def _get(**kwargs):
+            self.calls.append("pulls.get")
+            raise AssertionError("a refused job must not fetch its pull request")
+
+        def _create(**kwargs):
+            self.calls.append("checks.create")
+            self.checks.append(kwargs)
+
+        self.rest = SimpleNamespace(
+            pulls=SimpleNamespace(get=_get),
+            checks=SimpleNamespace(create=_create),
+        )
+
+
+def _wire_refusal(monkeypatch) -> tuple[_RecordingGitHub, list[str]]:
+    """The real check_run.post over a recording client, and a tripwire on
+    every fetch and read seam a refused job must never reach."""
+    gh = _RecordingGitHub()
+    reached: list[str] = []
+    monkeypatch.setattr(app_auth, "installation_client", lambda i: gh)
+    monkeypatch.setattr(review, "fetch_pr", lambda *a, **k: reached.append("fetch_pr"))
+    monkeypatch.setattr(review, "head_file_text", lambda *a, **k: reached.append("file"))
+    monkeypatch.setattr(review, "score_one", lambda *a, **k: reached.append("score_one"))
+    monkeypatch.setattr(reader, "_client", lambda: reached.append("reader._client"))
+    return gh, reached
+
+
+def test_a_refused_installation_is_fetched_nothing_and_shown_one_neutral_not_read(
+    tmp_path, monkeypatch, capsys, closing_gate
+):
+    """Intent: a pull request from an installation the founder has not
+    opened costs no fetch and no read, and is never left silent (ADR-0038,
+    ADR-0014 D8). Wrong input: drop the gate and pulls.get shows up."""
+    url = _db(tmp_path, monkeypatch)
+    gh, reached = _wire_refusal(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch)
+    ingest.enqueue(**JOB)
+
+    assert worker.process_job(ingest.claim()) is None
+
+    assert gh.calls == ["checks.create"]
+    assert reached == []
+    (check,) = gh.checks
+    assert check["conclusion"] == "neutral"
+    assert check["output"]["title"] == "Not read: not open"
+    (comment,) = upserts
+    assert "Not read: not open" in comment["body"]
+    assert "full receipt" not in comment["body"]
+    row = _job(url)
+    assert row["status"] == "done"
+    assert row["verdict_id"] is None
+    assert row["pr_comment_outcome"] == "created"
+    assert _rows(url, store.verdicts) == []
+    err = capsys.readouterr().err
+    assert (
+        "doug: not read drewjst/doug#7@aaaaaaaaaaaa (nothing fetched, nothing bought) "
+        "reason=not-open"
+    ) in err
+    assert "(paid read)" not in err
+
+
+def test_a_refused_installation_with_its_comment_off_gets_the_check_run_alone(
+    tmp_path, monkeypatch, closing_gate
+):
+    """The comment rides the repository's own toggle, unchanged."""
+    url = _db(tmp_path, monkeypatch)
+    gh, reached = _wire_refusal(monkeypatch)
+    upserts = _wire_pr_comment(monkeypatch)
+    _enable_pr_comment(monkeypatch, repo_setting=False)
+    ingest.enqueue(**JOB)
+
+    worker.process_job(ingest.claim())
+
+    assert gh.calls == ["checks.create"]
+    assert reached == []
+    assert upserts == []
+    assert _job(url)["pr_comment_outcome"] == "skipped:off"
+
+
+def test_the_not_read_check_names_no_value() -> None:
+    """A refusal carries no band, score, meter, cap, or count: no digit at
+    all, so nothing on a stranger's pull request reads as a verdict or
+    publishes a limit."""
+    from doug import outside
+
+    title, summary = check_run.render_not_read(outside.Reason.NOT_OPEN)
+    assert title == "Not read: not open"
+    assert not any(ch.isdigit() for ch in title + summary)
+    assert "Doug" not in title + summary
+
+
+def test_a_founder_installation_reads_exactly_as_before(
+    tmp_path, monkeypatch, capsys, closing_gate
+):
+    """R1: the gate changes nothing for the founder. The same pipeline as
+    the rest of this file, with the real gate on and JOB's installation on
+    the list: both reads are charged to it and the paid line prints."""
+    monkeypatch.setenv(closing_gate.FOUNDER_ENV, f"153075663 {JOB['installation_id']}")
+    _db(tmp_path, monkeypatch)
+    scopes: list[tuple[str, str]] = []
+    posted = _wire(monkeypatch, scopes=scopes)
+    ingest.enqueue(**JOB)
+
+    assert worker.process_job(ingest.claim()) is not None
+
+    scope = f"installation:{JOB['installation_id']}"
+    assert scopes == [("risk", scope), ("intent", scope)]
+    (check,) = posted
+    assert not check["title"].startswith("Not read")
+    assert "(paid read)" in capsys.readouterr().err

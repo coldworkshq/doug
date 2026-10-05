@@ -1221,6 +1221,28 @@ def render(
     return title[:TITLE_LIMIT], combined
 
 
+def render_not_read(reason) -> tuple[str, str]:
+    """The check run for an installation the closing gate refuses (ADR-0038).
+
+    No band, score, meter line, cap, or count: nothing a model read produced
+    and no value from any ledger, so a refused pull request can never read as
+    a verdict. Neutral like every check this module posts (`post`).
+    """
+    title = f"Not read: {reason}"
+    summary = "\n".join(
+        [
+            f"**{title}**",
+            "",
+            "Coldworks did not read this pull request. Reviews is not open to "
+            "new installations yet, so no model read ran and the diff was not "
+            "fetched.",
+            "",
+            "This check is neutral and never blocks a merge.",
+        ]
+    )
+    return title, summary
+
+
 def post(gh, owner: str, repo: str, head_sha: str, title: str, summary: str) -> None:
     """Create the check run. Never raises.
 

@@ -30,6 +30,7 @@ from . import (
     example_pack_capture,
     ingest,
     merge_sha,
+    outside,
     pr_comment,
     reader,
     review,
@@ -100,7 +101,9 @@ def _example_pack_scope(job: dict) -> CaptureScopeV0 | None:
     )
 
 
-def _pr_comment_outcome(gh, owner: str, name: str, job: dict, summary: str, *, fresh: bool) -> str:
+def _pr_comment_outcome(
+    gh, owner: str, name: str, job: dict, summary: str, *, fresh: bool, receipt: bool = True
+) -> str:
     """Decide and perform this job's sticky-comment write, returning the
     outcome token for the log line. May raise; `_post_pr_comment` owns that.
 
@@ -144,7 +147,9 @@ def _pr_comment_outcome(gh, owner: str, name: str, job: dict, summary: str, *, f
         summary,
         head_sha=job["head_sha"],
         seq=job["id"],
-        links=pr_comment.receipt_links(owner, name, pr),
+        # A refused installation gets no receipt links (ADR-0038): nobody
+        # outside the founder's accounts can sign in to follow them.
+        links=pr_comment.receipt_links(owner, name, pr) if receipt else None,
     )
     outcome = pr_comment.upsert(
         gh,
@@ -168,7 +173,9 @@ def _pr_comment_outcome(gh, owner: str, name: str, job: dict, summary: str, *, f
     return outcome
 
 
-def _post_pr_comment(gh, owner: str, name: str, job: dict, summary: str, *, fresh: bool) -> None:
+def _post_pr_comment(
+    gh, owner: str, name: str, job: dict, summary: str, *, fresh: bool, receipt: bool = True
+) -> None:
     """The sticky PR comment mirroring the check run (spec 2026-08-19).
 
     Posted from both review paths, immediately after `check_run.post` and
@@ -204,7 +211,7 @@ def _post_pr_comment(gh, owner: str, name: str, job: dict, summary: str, *, fres
     """
     outcome = "failed:internal"
     try:
-        outcome = _pr_comment_outcome(gh, owner, name, job, summary, fresh=fresh)
+        outcome = _pr_comment_outcome(gh, owner, name, job, summary, fresh=fresh, receipt=receipt)
     except Exception as e:  # noqa: BLE001 — advisory surface; the verdict is durable
         print(
             f"doug: comment internal error on job {job['id']} ({type(e).__name__}: {e})",
@@ -419,6 +426,42 @@ def _carry_rulings(job, pull, *, deep_read: bool) -> rulings.Resolved | None:
     return resolved
 
 
+def _refuse_job(job: dict, gh, owner: str, name: str, refusal: outside.Refused) -> None:
+    """Refusal (a), ADR-0038: an installation outside the deploy's founder
+    list gets one neutral "Not read" check run and the mirrored comment, and
+    nothing else. No pulls.get, no diff, no file, no model read and no
+    verdict; the job ends 'done' with no owed-comment marker, and the log
+    line says nothing was bought, so it cannot pass for a paid one.
+
+    Complete before post, as on the paid path: a lost claim must not post a
+    check run a second holder will post too. The comment goes through the
+    unchanged gate, the repository's own `pr_comment` toggle, with no receipt
+    links. It is posted as `fresh` without the target check the replay path
+    buys, because a refused job reads nothing; on a renamed repository whose
+    old name was reused inside one installation, this generic note can land
+    on the other pull request, a risk ADR-0038 accepts in exchange for
+    fetching nothing.
+    """
+    title, summary = check_run.render_not_read(refusal.reason)
+    if not ingest.complete(
+        job["id"], None, claim_generation=job["claim_generation"], owes_comment=False
+    ):
+        print(
+            f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",
+            file=sys.stderr,
+        )
+        return None
+    check_run.post(gh, owner, name, job["head_sha"], title, summary)
+    _post_pr_comment(gh, owner, name, job, summary, fresh=True, receipt=False)
+    print(
+        f"doug: not read {job['repo_full_name']}#{job['pr_number']}"
+        f"@{job['head_sha'][:12]} (nothing fetched, nothing bought) "
+        f"reason={refusal.reason.value.replace(' ', '-')}",
+        file=sys.stderr,
+    )
+    return None
+
+
 def process_job(job: dict) -> int | None:
     """Run one job. Returns the verdict id — the recorded one on a replay,
     a freshly scored one otherwise — or None when the job's head SHA no
@@ -454,6 +497,13 @@ def process_job(job: dict) -> int | None:
     )
     if existing is not None:
         return _replay_recorded(job, gh, owner, name, existing)
+
+    # The closing gate (ADR-0038), after the idempotency read so a verdict
+    # recorded before the gate still replays, and before pulls.get so a
+    # refused installation costs no fetch of its pull request at all.
+    refusal = outside.refusal_for(job["installation_id"])
+    if refusal is not None:
+        return _refuse_job(job, gh, owner, name, refusal)
 
     # Read the PR's current head before spending anything on it. A job can
     # sit in the queue behind a backlog, or be re-pended by a retry, long

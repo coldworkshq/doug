@@ -36,3 +36,29 @@ def _tracing_is_off_during_tests():
     for name in _TRACING_ENV:
         os.environ.pop(name, None)
     yield
+
+
+# ADR-0038: the closing gate refuses a read to every installation outside the
+# deploy's founder list. Every other test in this suite describes what an
+# installation that IS read gets, under whatever id its fixture happens to
+# use, so the suite's default is that the gate admits every installation. The
+# gate's own tests opt back into the real decision with `closing_gate`, which
+# reads DOUG_FOUNDER_INSTALLATIONS exactly as production does.
+from doug import outside as _outside  # noqa: E402
+
+_REAL_REFUSAL_FOR = _outside.refusal_for
+
+
+@pytest.fixture(autouse=True)
+def _every_test_installation_is_a_founder(monkeypatch):
+    monkeypatch.setattr(_outside, "refusal_for", lambda installation_id: None)
+    yield
+
+
+@pytest.fixture
+def closing_gate(monkeypatch):
+    """The real gate, with coldworkshq as the only founder unless a test
+    sets DOUG_FOUNDER_INSTALLATIONS itself."""
+    monkeypatch.setattr(_outside, "refusal_for", _REAL_REFUSAL_FOR)
+    monkeypatch.setenv(_outside.FOUNDER_ENV, "153075663")
+    return _outside

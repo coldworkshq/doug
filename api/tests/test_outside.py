@@ -61,7 +61,7 @@ def test_the_boot_check_refuses_an_empty_or_malformed_list(monkeypatch) -> None:
     assert outside.require_founders() == FOUNDERS
 
 
-def test_refusal_for_reads_the_deploys_list(monkeypatch) -> None:
+def test_refusal_for_reads_the_deploys_list(closing_gate, monkeypatch) -> None:
     monkeypatch.setenv(outside.FOUNDER_ENV, "153075663")
     assert outside.refusal_for(153075663) is None
     assert outside.refusal_for(7) == Refused(Reason.NOT_OPEN)
