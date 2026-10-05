@@ -450,7 +450,7 @@ def _refuse_job(job: dict, gh, owner: str, name: str, refusal: outside.Refused) 
             f"doug: job {job['id']} complete rejected (claim lost; skipping check run)",
             file=sys.stderr,
         )
-        return None
+        return
     check_run.post(gh, owner, name, job["head_sha"], title, summary)
     _post_pr_comment(gh, owner, name, job, summary, fresh=True, receipt=False)
     print(
@@ -459,7 +459,7 @@ def _refuse_job(job: dict, gh, owner: str, name: str, refusal: outside.Refused) 
         f"reason={refusal.reason.value.replace(' ', '-')}",
         file=sys.stderr,
     )
-    return None
+    return
 
 
 def process_job(job: dict) -> int | None:

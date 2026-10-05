@@ -537,3 +537,43 @@ def test_accepted_keys_produce_the_client_and_no_diagnostic(monkeypatch, capsys)
 
     assert tracing._client() is built[0]
     assert "doug: tracing" not in capsys.readouterr().err
+
+
+# --- ADR-0038: a refused installation is never traced ---------------------
+
+
+def test_a_refused_installation_opens_no_span_and_a_founder_still_does(monkeypatch, closing_gate):
+    """Stranger source never reaches Langfuse (ADR-0038, amending ADR-0031).
+    The founder half is what makes this fail if tracing were simply switched
+    off. The call itself still goes out: refusing the read is reader._charge's
+    job, and tracing never decides whether a request is sent."""
+    _switch_on(monkeypatch)
+    log: list = []
+    _install(monkeypatch, _FakeLangfuse(log))
+    client = _RecordingClient()
+
+    tracing.create(client, REQUEST, kind="risk", scope="installation:7")
+    tracing.create(client, REQUEST, kind="verify", scope="verify:7")
+    with tracing.job(
+        job_id=1, installation_id=7, repo_full_name="a/b", pr_number=3, head_sha="deadbeef"
+    ):
+        pass
+    assert [entry for entry in log if entry[0] == "start"] == []
+    assert len(client.messages.seen) == 2
+
+    tracing.create(client, REQUEST, kind="risk", scope="installation:153075663")
+    with tracing.job(
+        job_id=2, installation_id=153075663, repo_full_name="a/b", pr_number=3, head_sha="d"
+    ):
+        pass
+    assert len([entry for entry in log if entry[0] == "start"]) == 2
+
+
+def test_an_untenanted_call_is_traced_as_before(monkeypatch, closing_gate):
+    _switch_on(monkeypatch)
+    log: list = []
+    _install(monkeypatch, _FakeLangfuse(log))
+
+    tracing.create(_RecordingClient(), REQUEST, kind="risk", scope=reader.SENTINEL_SCOPE)
+
+    assert len([entry for entry in log if entry[0] == "start"]) == 1
