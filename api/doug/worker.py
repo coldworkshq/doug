@@ -627,21 +627,27 @@ def process_job(job: dict) -> int | None:
         installation_id=job["installation_id"],
         github_repository_id=job["github_repo_id"],
     )
-    with pack_context:
-        tier, verdict, rv, cov = review.score_one(
-            meta,
-            diff,
-            scope=scope,
-            threshold=threshold,
-            deep_read=deep_read,
-            resolve_file=resolve,
-            resolve_schema=store.columns_of,
-            resolve_ci=resolve_ci,
-            carry=carry,
-        )
-        intent_result = review.read_intent(
-            gh, owner, name, meta, diff, scope=scope, deep_read=deep_read
-        )
+    try:
+        with pack_context:
+            tier, verdict, rv, cov = review.score_one(
+                meta,
+                diff,
+                scope=scope,
+                threshold=threshold,
+                deep_read=deep_read,
+                resolve_file=resolve,
+                resolve_schema=store.columns_of,
+                resolve_ci=resolve_ci,
+                carry=carry,
+            )
+            intent_result = review.read_intent(
+                gh, owner, name, meta, diff, scope=scope, deep_read=deep_read
+            )
+    except reader.OutsideRefused as refused:
+        # The gate's second refusal (ADR-0038), raised by reader._charge on
+        # a paid path the first one did not stop. Routed to the same
+        # surface: one neutral "Not read", never a capped verdict.
+        return _refuse_job(job, gh, owner, name, outside.Refused(refused.reason))
     intent_read: review.IntentRead | None
     if isinstance(intent_result, review.IntentFailure):
         verdict.reasons.append(

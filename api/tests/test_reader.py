@@ -2274,3 +2274,67 @@ def test_the_two_mechanical_passes_are_named_separately():
         "attribute_findings.model",
         "attribute_findings.effort",
     }
+
+
+# --- ADR-0038: the closing gate's second refusal, at the charge ----------
+
+
+def _counter_rows(url: str) -> int:
+    from sqlalchemy import create_engine, func, select
+
+    with create_engine(url).connect() as conn:
+        return conn.execute(select(func.count()).select_from(store.deep_read_counters)).scalar_one()
+
+
+def test_a_refused_installation_spends_nothing_under_any_tier_prefix(
+    tmp_path, monkeypatch, closing_gate
+):
+    """A scope that names an installation outside the founder list raises
+    before the ledger's counter moves and before any client exists, under
+    every prefix a paid read charges. Shown on the real ledger: a refusal
+    placed after record_deep_read would leave a counted attempt behind."""
+    url = f"sqlite:///{tmp_path}/doug.db"
+    monkeypatch.setenv("DATABASE_URL", url)
+    reader._charge(reader.installation_scope(153075663))  # creates the ledger
+    before = _counter_rows(url)
+    client = FakeClient()
+
+    for scope in (
+        reader.installation_scope(7),
+        reader.verify_scope(7),
+        reader.attribution_scope(7),
+        reader.carry_scope(7),
+    ):
+        with pytest.raises(reader.OutsideRefused) as refused:
+            reader._charge(scope)
+        assert str(refused.value) == "not open"  # no scope, cap, or count
+    with pytest.raises(reader.SpendCapExceeded):  # every "no read" handler catches it
+        reader.read_diff(_pr(), "+ x", scope=reader.installation_scope(7), client=client)
+
+    assert _counter_rows(url) == before
+    assert client.messages.calls == 0
+
+
+def test_the_founder_and_the_untenanted_scopes_keep_todays_charge(monkeypatch, closing_gate):
+    charged: list[str] = []
+    monkeypatch.setattr(store, "record_deep_read", lambda scope, cap: charged.append(scope) or True)
+
+    reader._charge(reader.installation_scope(153075663))
+    reader._charge(reader.SENTINEL_SCOPE)
+    reader._charge(reader.verify_scope(None))
+
+    assert charged == ["installation:153075663", "untenanted", "verify:untenanted"]
+
+
+def test_score_one_hands_a_refusal_back_instead_of_a_capped_verdict(monkeypatch, closing_gate):
+    """Wrong input: put the re-raise below the SpendCapExceeded clause and a
+    'reader-capped' deterministic band comes back for a refused pull
+    request, which is a verdict nothing read."""
+    monkeypatch.setenv("DOUG_READER", "1")
+    made: list[str] = []
+    monkeypatch.setattr(reader, "_client", lambda: made.append("client"))
+
+    with pytest.raises(reader.OutsideRefused):
+        review.score_one(_pr(), "+ x", scope=reader.installation_scope(7))
+
+    assert made == []

@@ -3899,3 +3899,25 @@ def test_a_founder_installation_reads_exactly_as_before(
     (check,) = posted
     assert not check["title"].startswith("Not read")
     assert "(paid read)" in capsys.readouterr().err
+
+
+def test_a_refusal_from_a_paid_path_lands_on_the_same_not_read(tmp_path, monkeypatch):
+    """Refusal (b), routed: a paid path that refuses after the first gate let
+    the job through still leaves one neutral "Not read" and no verdict."""
+    from doug import outside
+
+    url = _db(tmp_path, monkeypatch)
+    posted = _wire(monkeypatch)
+
+    def _refusing_score_one(*args, **kwargs):
+        raise reader.OutsideRefused(outside.Reason.NOT_OPEN)
+
+    monkeypatch.setattr(review, "score_one", _refusing_score_one)
+    ingest.enqueue(**JOB)
+
+    assert worker.process_job(ingest.claim()) is None
+
+    (check,) = posted
+    assert check["title"] == "Not read: not open"
+    assert _rows(url, store.verdicts) == []
+    assert _job(url)["status"] == "done"
