@@ -3035,6 +3035,12 @@ def _record_external_review(payload: dict) -> None:
     differ only in case — so it strictly removes that failure without
     admitting anything new.
     """
+    # ADR-0038: a stance from an installation outside the deploy's founder
+    # list is not ingested, so a refused installation leaves no row in the
+    # ledger. A missing or malformed id names nobody, which the gate refuses.
+    installation_id = _obj(payload.get("installation")).get("id")
+    if outside.refusal_for(installation_id if isinstance(installation_id, int) else None):
+        return
     review_ = _obj(payload.get("review"))
     pr = _obj(payload.get("pull_request"))
     state = review_.get("state")

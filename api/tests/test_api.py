@@ -6415,3 +6415,19 @@ def test_an_installation_that_never_registered_the_repo_stays_unreadable(tmp_pat
 
     assert [row["verdict_id"] for row in listed.json()["items"]] == []
     assert refused.status_code == 404
+
+
+def test_a_refused_installations_review_writes_no_stance(tmp_path, monkeypatch, closing_gate):
+    """ADR-0038: an installation outside the founder list leaves no row in
+    the ledger, and the same approval from a listed one still writes its
+    stance. INSTALLATION is not a founder under closing_gate's list until the
+    test adds it. Wrong input: drop the gate and the first webhook writes."""
+    _hook_env(tmp_path, monkeypatch)
+
+    assert _webhook("pull_request_review", _review_payload()).status_code == 202
+    assert _table(tmp_path, store.verdicts) == []
+
+    monkeypatch.setenv(closing_gate.FOUNDER_ENV, f"153075663 {INSTALLATION['id']}")
+    assert _webhook("pull_request_review", _review_payload()).status_code == 202
+    (stance,) = _table(tmp_path, store.verdicts)
+    assert stance["tier"] == "external"
