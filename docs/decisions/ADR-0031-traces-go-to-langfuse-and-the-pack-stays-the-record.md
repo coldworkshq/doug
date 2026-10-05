@@ -2,7 +2,13 @@
 title: Model calls are traced to Langfuse, and the example pack stays the record
 status: accepted
 date: 2026-09-03
+amended_by: ADR-0038
 ---
+
+> **Amended by ADR-0038 (2026-10-04): decision 1 holds for the installations
+> the deploy names as the founder's.** A call charged to any other
+> installation is not traced, and that installation's review job opens no
+> trace root, so its source never reaches Langfuse.
 
 > **A viewing surface, not a second record.** The Example Pack lane
 > (ADR-0026, ADR-0027) remains the only evidence this repository reasons from.
