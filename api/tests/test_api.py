@@ -300,6 +300,31 @@ def test_startup_refuses_to_run_without_a_webhook_secret(monkeypatch):
             pass
 
 
+def test_startup_refuses_to_run_with_the_app_on_and_no_founder_list(monkeypatch):
+    """ADR-0038: with the App on, every installation outside the founder
+    list is refused a read. Booting with an empty list would refuse the
+    founder's own installations, so the revision fails to start and the
+    deploy never promotes it, instead of darkening the dogfood (R1)."""
+    _startup_guards(monkeypatch, app_enabled=True, ledger=False)
+    for value in (None, "", "153075663 typo"):
+        if value is None:
+            monkeypatch.delenv("DOUG_FOUNDER_INSTALLATIONS", raising=False)
+        else:
+            monkeypatch.setenv("DOUG_FOUNDER_INSTALLATIONS", value)
+        with pytest.raises(RuntimeError, match="DOUG_FOUNDER_INSTALLATIONS"):
+            with TestClient(app):
+                pass
+
+
+def test_startup_needs_no_founder_list_while_the_app_is_off(monkeypatch):
+    """Local runs and the open-source path have no App, so nothing is read
+    for anyone and there is no founder to darken."""
+    _startup_guards(monkeypatch, app_enabled=False, ledger=False)
+    monkeypatch.delenv("DOUG_FOUNDER_INSTALLATIONS", raising=False)
+    with TestClient(app) as c:
+        assert c.get("/healthz").status_code == 200
+
+
 def test_startup_succeeds_once_the_secret_is_configured(monkeypatch):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
     with TestClient(app) as c:
@@ -317,6 +342,8 @@ def test_startup_succeeds_once_the_secret_is_configured(monkeypatch):
 
 def _startup_guards(monkeypatch, *, app_enabled: bool, ledger: bool) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
+    # ADR-0038: with the App on, the lifespan also requires the founder list.
+    monkeypatch.setenv("DOUG_FOUNDER_INSTALLATIONS", "153075663")
     monkeypatch.setattr(app_auth, "enabled", lambda: app_enabled)
     monkeypatch.setattr(store, "enabled", lambda: ledger)
 

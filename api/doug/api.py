@@ -35,6 +35,7 @@ from . import (
     intent_providers,
     merge_sha,
     outcome_queue,
+    outside,
     precision,
     reader,
     session_auth,
@@ -186,6 +187,12 @@ async def lifespan(app: FastAPI):
     """
     if not os.environ.get("GITHUB_WEBHOOK_SECRET"):
         raise RuntimeError("GITHUB_WEBHOOK_SECRET is unset — refusing to serve /webhooks/github")
+    if app_auth.enabled():
+        # ADR-0038: with the App on, every installation outside the deploy's
+        # founder list is refused a read, so an empty or malformed list would
+        # refuse the founder too. Failing the boot fails the deploy: a
+        # candidate that cannot start is never promoted.
+        outside.require_founders()
     if app_auth.enabled() and store.enabled():
         # A thread, not an await and not inline: Cloud Run holds the revision
         # out of rotation until the lifespan yields, and this walks every open

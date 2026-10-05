@@ -328,6 +328,23 @@ def test_api_deploy_carries_the_verify_installations_allowlist():
     assert "DOUG_VERIFY=1" not in body
 
 
+def test_api_deploy_carries_the_founder_list_and_it_names_both_founders():
+    """ADR-0038: the closing gate reads every installation outside this list
+    as refused. It reaches the service only through this line, so dropping it
+    fails the boot (the lifespan requires it) and dropping an id refuses that
+    founder's pull requests a read (R1). Parsed by the module that reads it in
+    production, so a separator gcloud would split on also goes red here."""
+    from doug import outside
+
+    body = _function_body("deploy")
+    match = re.search(r"DOUG_FOUNDER_INSTALLATIONS=([^,\"]*)", body)
+    assert match, "deploy no longer sets DOUG_FOUNDER_INSTALLATIONS"
+    founders = outside.parse_founders(match.group(1))
+    assert outside.decide(153075663, founders) == outside.Founder()  # coldworkshq
+    assert outside.decide(151500529, founders) == outside.Founder()  # lemahq
+    assert founders == frozenset({153075663, 151500529})
+
+
 # --- ADR-0029: the reader's transport is Vertex, and its rollback is an env ---
 
 
