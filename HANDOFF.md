@@ -1,5 +1,29 @@
 # HANDOFF — doug
 
+--- dependabot-triage lane (2026-10-17 UTC): the shipped critical and high alerts ---
+
+State:    building — claimed under R5 at 2026-10-17 on branch
+          claude/dependabot-triage off origin/main 0f5c581, worktree
+          .claude/worktrees/dependabot-triage. Open doug PRs at claim: #396
+          and #397 (draft; owns check_ratchets.py, untouched here). 62 open
+          alerts. Shipped: PyJWT and urllib3 (api image), next and sharp
+          (web and console runtime images). Every other alerted npm package
+          reaches the tree only through the shadcn CLI, ESLint, or Tailwind,
+          and neither runtime image carries it.
+Next:     Lock PyJWT 2.15.1, urllib3 2.8.0, next 16.3.8, sharp 0.35.5; run
+          make check, the api suite, and each workspace's test and build;
+          open the draft PR; file issues for the build-only alerts.
+Blockers: none.
+Decisions this session:
+- Fix only the shipped critical and high alerts; the build-only ones go to
+  issues — rejected: refreshing every in-range transitive package here,
+  which widens a security patch into a build-tool refresh.
+- The lockfile is written by npm 10 in node:22, the npm CI and the image
+  builds run — rejected: the local npm 11, which writes different peer
+  flags (#357).
+Pointers: api/uv.lock · package-lock.json · web/package.json ·
+          console/package.json
+
 --- close-reviews-entry lane (2026-10-03 UTC): the Guards mapping deploys from a secret, and the door stops inviting installs ---
 
 State:    review — claimed under R5 at 2026-10-03T21:43Z on branch
