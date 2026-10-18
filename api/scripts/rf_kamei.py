@@ -35,7 +35,7 @@ from doug.backtest.harvest import harvest
 from doug.backtest.hotspots import learn_hotspot_segments
 from doug.backtest.replay import replay
 
-print = functools.partial(print, flush=True)  # noqa: A001
+print = functools.partial(print, flush=True)
 
 REPOS = {
     "sentry": ("getsentry", "sentry", 10000, "2026-03-20"),

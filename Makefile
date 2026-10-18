@@ -59,7 +59,8 @@ typecheck:
 typecheck-baseline:
 	cd api && (uv run basedpyright --writebaseline > /dev/null || true) && uv run basedpyright
 
-# Shrink-only ruff debt and type baseline. CI passes RATCHETS_FLAGS=--require-base.
+# Shrink-only ruff debt, type baseline, and inline suppressions (`# noqa`,
+# `# type: ignore`, `# pyright:`). CI passes RATCHETS_FLAGS=--require-base.
 ratchets:
 	cd api && uv run python ../.github/scripts/check_ratchets.py $(RATCHETS_FLAGS)
 

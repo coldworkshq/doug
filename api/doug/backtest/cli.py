@@ -27,7 +27,7 @@ from .label import label_defects
 from .replay import replay
 
 # Progress output should be visible when piped (CI, terminals files).
-print = functools.partial(print, flush=True)  # noqa: A001
+print = functools.partial(print, flush=True)
 
 FLAG_RATES = [0.05, 0.10, 0.20, 0.30]
 

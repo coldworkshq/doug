@@ -28,7 +28,7 @@ from doug.backtest.harvest import harvest
 from doug.backtest.hotspots import learn_hotspot_segments, rolling_window
 from doug.backtest.replay import replay
 
-print = functools.partial(print, flush=True)  # noqa: A001
+print = functools.partial(print, flush=True)
 
 CACHE = Path(".backtest-cache")
 REPO = ("getsentry", "sentry")

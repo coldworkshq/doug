@@ -26,7 +26,7 @@ from .backtest.harvest import resolve_token
 from .models import AuthorType, Band, PRMetadata, Reason, Verdict, is_bot_author
 from .scoring import score
 
-print = functools.partial(print, flush=True)  # noqa: A001
+print = functools.partial(print, flush=True)
 
 
 class ReviewItem(BaseModel):

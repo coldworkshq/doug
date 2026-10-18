@@ -36,7 +36,7 @@ from rf_kamei import REPOS, load
 from doug.backtest.curve import capture_curve
 from doug.backtest.harvest import resolve_token
 
-print = functools.partial(print, flush=True)  # noqa: A001
+print = functools.partial(print, flush=True)
 
 DIR = Path(".backtest-cache/intent-probe-v2")  # v1 artifacts kept for the record
 PROBE_1B = Path(".backtest-cache/llm-probe-grafana")

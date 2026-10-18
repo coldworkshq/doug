@@ -26,7 +26,7 @@ from doug.backtest.hotspots import learn_hotspot_segments
 from doug.backtest.replay import replay
 from doug.models import Reason
 
-print = functools.partial(print, flush=True)  # noqa: A001
+print = functools.partial(print, flush=True)
 
 CACHE = Path(".backtest-cache")
 REPO = ("getsentry", "sentry")

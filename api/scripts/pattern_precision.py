@@ -41,7 +41,7 @@ from rf_kamei import REPOS, load
 from doug import store
 from doug.precision import corpus_table, fold
 
-print = functools.partial(print, flush=True)  # noqa: A001
+print = functools.partial(print, flush=True)
 
 CACHE = Path(".backtest-cache")
 FRAME = CACHE / "pattern-precision-frame.json"

@@ -763,7 +763,7 @@ def verify_finding(finding: ReaderFinding, *, scope: str, client=None) -> Verify
     }
     try:
         response = tracing.create(client, request, kind="verify", scope=scope, pr=None)
-    except Exception as e:  # noqa: BLE001 — same contract as read_diff
+    except Exception as e:  # same contract as read_diff
         raise ReaderError(f"{type(e).__name__}: {e}") from e
     _report_cost(response, kind="verify", scope=scope, pr=None, model=MECHANICAL_MODEL)
     text = next((b.text for b in response.content if b.type == "text"), "")
@@ -771,7 +771,7 @@ def verify_finding(finding: ReaderFinding, *, scope: str, client=None) -> Verify
         raise ReaderError(f"verify stopped with {response.stop_reason}")
     try:
         return VerifyResponse.model_validate_json(text)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise ReaderError(f"verify parse failed: {type(e).__name__}: {e}") from e
 
 
@@ -1505,7 +1505,7 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
     if client is None:
         try:
             client = _client()
-        except Exception as exc:  # noqa: BLE001 - preserve existing exception
+        except Exception as exc:  # preserve existing exception
             _record_attempt(
                 attempt_kind="risk",
                 pr=pr,
@@ -1537,7 +1537,7 @@ def read_diff(pr, diff: str, *, scope: str, client=None) -> ReaderVerdict:
     )
     try:
         response = tracing.create(client, request, kind="risk", scope=scope, pr=pr)
-    except Exception as e:  # noqa: BLE001 — every transport failure is a ReaderError
+    except Exception as e:  # every transport failure is a ReaderError
         _record_attempt(
             attempt_kind="risk",
             pr=pr,
@@ -1677,7 +1677,7 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
     if client is None:
         try:
             client = _client()
-        except Exception as exc:  # noqa: BLE001 - preserve existing exception
+        except Exception as exc:  # preserve existing exception
             _record_attempt(
                 attempt_kind="intent",
                 pr=pr,
@@ -1709,7 +1709,7 @@ def read_with_decisions(pr, diff: str, docs, *, scope: str, client=None) -> Inte
     )
     try:
         response = tracing.create(client, request, kind="intent", scope=scope, pr=pr)
-    except Exception as exc:  # noqa: BLE001 - preserve the existing SDK exception
+    except Exception as exc:  # preserve the existing SDK exception
         _record_attempt(
             attempt_kind="intent",
             pr=pr,

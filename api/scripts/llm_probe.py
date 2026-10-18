@@ -45,7 +45,7 @@ from doug.backtest.hotspots import learn_hotspot_segments
 from doug.backtest.replay import replay
 from doug.patterns import SLUG_MERGES
 
-print = functools.partial(print, flush=True)  # noqa: A001
+print = functools.partial(print, flush=True)
 
 REPO = "sentry"  # --grafana switches both; sentry keeps its original paths
 DIR = Path(".backtest-cache/llm-probe")

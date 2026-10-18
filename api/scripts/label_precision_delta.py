@@ -31,7 +31,7 @@ from doug.backtest.harvest import harvest
 from doug.backtest.hotspots import learn_hotspot_segments
 from doug.backtest.replay import replay
 
-print = functools.partial(print, flush=True)  # noqa: A001
+print = functools.partial(print, flush=True)
 
 CACHE = Path(".backtest-cache")
 RATES = [0.05, 0.10, 0.20, 0.30]
