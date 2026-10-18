@@ -2,17 +2,19 @@
 
 --- dependabot-triage lane (2026-10-17 UTC): the shipped critical and high alerts ---
 
-State:    building — claimed under R5 at 2026-10-17 on branch
+State:    review — draft PR #400, claimed under R5 at 2026-10-17 on branch
           claude/dependabot-triage off origin/main 0f5c581, worktree
           .claude/worktrees/dependabot-triage. Open doug PRs at claim: #396
           and #397 (draft; owns check_ratchets.py, untouched here). 62 open
-          alerts. Shipped: PyJWT and urllib3 (api image), next and sharp
-          (web and console runtime images). Every other alerted npm package
-          reaches the tree only through the shadcn CLI, ESLint, or Tailwind,
-          and neither runtime image carries it.
-Next:     Lock PyJWT 2.15.1, urllib3 2.8.0, next 16.3.8, sharp 0.35.5; run
-          make check, the api suite, and each workspace's test and build;
-          open the draft PR; file issues for the build-only alerts.
+          alerts. 39 ship (PyJWT and urllib3 in the api image, next and
+          sharp in both Node runtime images) and close here: PyJWT 2.15.1,
+          urllib3 2.8.0, next 16.3.8, sharp 0.35.5. 23 are build-only:
+          #398 (22, in-range refresh) and #399 (braces, no patch).
+          make check 0; api 2099 passed, 0 skipped; web 496 and console 125
+          passed, 0 skipped; lint and build 0 for both, in node:22.
+Next:     CI and Doug's read on #400; then founder: gh pr ready and squash.
+          A merge deploys api and web; doug-console keeps next 16.3.5 until
+          gcp.sh console runs (#356).
 Blockers: none.
 Decisions this session:
 - Fix only the shipped critical and high alerts; the build-only ones go to
