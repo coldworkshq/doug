@@ -51,7 +51,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import example_pack_capture, hunks, tracing
+from . import example_pack_capture, hunks, outside, tracing
 from .example_pack import (
     CoverageV0,
     FailureV0,
@@ -469,6 +469,22 @@ class SpendCapExceeded(ReaderError):
     """
 
 
+class OutsideRefused(SpendCapExceeded):
+    """The scope names an installation outside the deploy's founder list
+    (ADR-0038); nothing was sent and no counter moved.
+
+    A SpendCapExceeded so that every caller which already handles "no read
+    this time" handles this the same quiet way, never as a broken reader
+    whose log line the fallback alert watches. review.score_one re-raises it
+    ahead of its cap clause, so it never becomes a capped verdict. Its
+    message is the reason text alone: no scope, cap, or count.
+    """
+
+    def __init__(self, reason: outside.Reason):
+        super().__init__(reason.value)
+        self.reason = reason
+
+
 # --- The monthly deep-read cap -------------------------------------------
 #
 # Checked here, in the module that spends the money, rather than in each
@@ -612,6 +628,15 @@ def _charge(scope: str) -> None:
     """
     from . import store  # local: store imports reader.Coverage at module level
 
+    # The closing gate's second refusal (ADR-0038), before the counter and
+    # the client: a scope that names an installation outside the founder
+    # list spends nothing, whichever paid path reached here. Un-tenanted
+    # scopes name nobody and keep today's path.
+    installation = outside.installation_of(scope)
+    if installation is not None:
+        refusal = outside.refusal_for(installation)
+        if refusal is not None:
+            raise OutsideRefused(refusal.reason)
     cap = cap_for(scope)
     if not store.record_deep_read(scope, cap):
         raise SpendCapExceeded(

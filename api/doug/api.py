@@ -35,6 +35,7 @@ from . import (
     intent_providers,
     merge_sha,
     outcome_queue,
+    outside,
     precision,
     reader,
     session_auth,
@@ -186,6 +187,12 @@ async def lifespan(app: FastAPI):
     """
     if not os.environ.get("GITHUB_WEBHOOK_SECRET"):
         raise RuntimeError("GITHUB_WEBHOOK_SECRET is unset — refusing to serve /webhooks/github")
+    if app_auth.enabled():
+        # ADR-0038: with the App on, every installation outside the deploy's
+        # founder list is refused a read, so an empty or malformed list would
+        # refuse the founder too. Failing the boot fails the deploy: a
+        # candidate that cannot start is never promoted.
+        outside.require_founders()
     if app_auth.enabled() and store.enabled():
         # A thread, not an await and not inline: Cloud Run holds the revision
         # out of rotation until the lifespan yields, and this walks every open
@@ -3028,6 +3035,12 @@ def _record_external_review(payload: dict) -> None:
     differ only in case — so it strictly removes that failure without
     admitting anything new.
     """
+    # ADR-0038: a stance from an installation outside the deploy's founder
+    # list is not ingested, so a refused installation leaves no row in the
+    # ledger. A missing or malformed id names nobody, which the gate refuses.
+    installation_id = _obj(payload.get("installation")).get("id")
+    if outside.refusal_for(installation_id if isinstance(installation_id, int) else None):
+        return
     review_ = _obj(payload.get("review"))
     pr = _obj(payload.get("pull_request"))
     state = review_.get("state")

@@ -966,6 +966,12 @@ deploy() {
   # revision pins image and environment as one. Re-adding the variable here
   # would not stop anything on its own — nothing reads it any more.
   #
+  # DOUG_FOUNDER_INSTALLATIONS is the closing gate's founder list (ADR-0038):
+  # these installations read as before, and every other one is refused a
+  # model read and shown "Not read: not open". Space-separated, because
+  # --set-env-vars splits on commas. doug/outside.py parses it, the lifespan
+  # refuses to boot without it while the App is enabled, and
+  # test_deploy_gcp.py pins both ids: coldworkshq and lemahq, the founder's.
   # DOUG_VERIFY_INSTALLATIONS is an ALLOWLIST, not a switch, and it replaced
   # a process-wide DOUG_VERIFY=1 boolean before that boolean was ever set.
   # Grounding buys up to MAX_VERIFY_READS_PER_REVIEW extra paid calls per
@@ -1018,7 +1024,7 @@ deploy() {
     --service-account "doug-api-sa@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CONN" \
     --set-secrets "DATABASE_URL=doug-database-url:latest,DOUG_API_TOKEN=doug-api-token:latest,GITHUB_WEBHOOK_SECRET=doug-webhook-secret:latest,GITHUB_APP_PRIVATE_KEY=doug-github-app-key:latest,DOUG_TOKEN_PEPPER=doug-token-pepper:latest,WORKOS_API_KEY=doug-workos-api-key:latest,WORKOS_CLIENT_ID=doug-workos-client-id:latest,DOUG_INSTALL_FLOW_SECRET=doug-install-flow-secret:latest${example_pack_secret:+,$example_pack_secret}${langfuse_secret:+,$langfuse_secret}" \
-    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$web_base,DOUG_VERIFY_INSTALLATIONS=153075663,DOUG_READER_TRANSPORT=$READER_TRANSPORT,CLOUD_ML_REGION=$VERTEX_REGION,ANTHROPIC_FEDERATION_RULE_ID=$FEDERATION_RULE_ID,ANTHROPIC_ORGANIZATION_ID=$FEDERATION_ORG_ID,ANTHROPIC_SERVICE_ACCOUNT_ID=$FEDERATION_SERVICE_ACCOUNT_ID,ANTHROPIC_WORKSPACE_ID=$FEDERATION_WORKSPACE_ID${example_pack_env:+,$example_pack_env}${langfuse_env:+,$langfuse_env}" \
+    --set-env-vars "DOUG_READER=1,DOUG_INTENT_INSTALLATIONS=153075663,DOUG_GITHUB_APP_ID=4450932,DOUG_PREREG_HASH=$prereg_hash,DOUG_SHOWCASE_REPO=$SHOWCASE_REPO,DOUG_WEB_URL=$web_base,DOUG_VERIFY_INSTALLATIONS=153075663,DOUG_FOUNDER_INSTALLATIONS=153075663 151500529,DOUG_READER_TRANSPORT=$READER_TRANSPORT,CLOUD_ML_REGION=$VERTEX_REGION,ANTHROPIC_FEDERATION_RULE_ID=$FEDERATION_RULE_ID,ANTHROPIC_ORGANIZATION_ID=$FEDERATION_ORG_ID,ANTHROPIC_SERVICE_ACCOUNT_ID=$FEDERATION_SERVICE_ACCOUNT_ID,ANTHROPIC_WORKSPACE_ID=$FEDERATION_WORKSPACE_ID${example_pack_env:+,$example_pack_env}${langfuse_env:+,$langfuse_env}" \
     --no-cpu-throttling \
     --memory 512Mi --cpu 1 --max-instances 2 --timeout 300 \
     $traffic_flags

@@ -49,6 +49,8 @@ import sys
 import time
 from contextlib import contextmanager
 
+from . import outside
+
 # Which env var turns this on. A separate switch from DOUG_READER on purpose:
 # turning the reader off must not depend on remembering to turn tracing off
 # too, and turning tracing off during an incident must not touch the reader.
@@ -223,6 +225,16 @@ def _usage_details(response) -> dict | None:
     return details or None
 
 
+def _refused_scope(scope: str) -> bool:
+    """ADR-0038, amending ADR-0031: a call charged to an installation outside
+    the deploy's founder list is never traced, so a refused installation's
+    diff and the model's reading of it never reach Langfuse. Decided before
+    the client is built. Un-tenanted scopes name nobody and trace as before.
+    """
+    installation = outside.installation_of(scope)
+    return installation is not None and outside.refusal_for(installation) is not None
+
+
 def create(client, request: dict, *, kind: str, scope: str, pr=None):
     """Run one paid model call, traced. Returns exactly what the SDK returns.
 
@@ -241,7 +253,7 @@ def create(client, request: dict, *, kind: str, scope: str, pr=None):
     showed it as an ordinary success would hide the most expensive reads there
     are — the same defect `_report_cost`'s ordering exists to avoid.
     """
-    lf = _client() if enabled() else None
+    lf = _client() if enabled() and not _refused_scope(scope) else None
     if lf is None:
         return client.messages.create(**request)
 
@@ -364,7 +376,9 @@ def job(*, job_id, installation_id, repo_full_name: str, pr_number, head_sha: st
     losing `propagate_attributes` costs the session grouping and nothing else,
     so a review still traces rather than not tracing at all.
     """
-    lf = _client() if enabled() else None
+    # ADR-0038: a refused installation's job opens no trace root, so nothing
+    # under it can carry its source to Langfuse.
+    lf = _client() if enabled() and outside.refusal_for(installation_id) is None else None
     if lf is None:
         yield
         return

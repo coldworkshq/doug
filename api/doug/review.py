@@ -670,6 +670,11 @@ def score_one(
                         file=sys.stderr,
                     )
             return "reader", verdict, rv, cov
+        except reader.OutsideRefused:
+            # Before SpendCapExceeded, its parent (ADR-0038): a refused
+            # installation gets no verdict of any band, so the refusal goes
+            # back to process_job, which posts "Not read" instead.
+            raise
         except reader.SpendCapExceeded as e:
             # Before ReaderError: SpendCapExceeded is a subclass of it, so a
             # broader clause first would relabel every capped read as a
