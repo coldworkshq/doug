@@ -1,5 +1,27 @@
 # HANDOFF — doug
 
+--- inline suppression ratchet (2026-10-17): noqa and type ignores counted per rule ---
+
+State:    review — claimed under R5 on branch claude/inline-suppression-ratchet
+          off origin/main 0f5c581, worktree .claude/worktrees/inline-suppressions.
+          .github/scripts/check_ratchets.py counts `# noqa`, `# type: ignore`,
+          and `# pyright:` per rule against the merge base's api/ tree; RUF100
+          left the debt table and 23 dead directives in 17 files are deleted
+          (the six with a reason keep it as a plain comment). make check 0.
+          Four planted files red, a string green; five mutants each fail a
+          test. Count today: 70, of which 62 are `noqa: BLE001`.
+Next:     Founder: approve "no allowance for a deliberate new suppression"
+          (coldworks docs/decisions.md 2026-10-17 records it); gh pr ready;
+          squash. The same change is coldworkshq/coldworks#118.
+Blockers: none.
+Decisions this session:
+- Count the base by linting the merge base's api/ tree, not from a
+  committed table — the source already holds the count — rejected: a
+  generated table with a regenerate command and a protect-paths entry.
+- No allowance for a deliberate new suppression (founder) — rejected:
+  reason-bearing noqa as an exception; 71 of 96 noqa here already had one,
+  and BLE001 still grew from 39 to 69.
+
 --- close-reviews-entry lane (2026-10-03 UTC): the Guards mapping deploys from a secret, and the door stops inviting installs ---
 
 State:    review — claimed under R5 at 2026-10-03T21:43Z on branch
