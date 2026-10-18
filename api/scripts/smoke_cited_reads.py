@@ -45,8 +45,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from doug import reader, review  # noqa: E402
-from doug.models import AuthorType, PRMetadata  # noqa: E402
+from doug import reader, review
+from doug.models import AuthorType, PRMetadata
 
 REF = "616ff99"
 REPO_ROOT = Path(__file__).resolve().parents[2]

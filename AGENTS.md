@@ -68,4 +68,8 @@ in `.claude/settings.json` keeps an agent from finishing on a red run.
 `api/.basedpyright/baseline.json`. Fix a violation in the file you touch, then
 run `make ruff-debt` or commit the smaller baseline that basedpyright writes.
 Never add to either to get green: the ratchet fails the change against its
-merge base.
+merge base. The same holds for inline suppressions: a change that adds a
+`# noqa`, `# type: ignore`, or `# pyright:` comment for a rule fails unless it
+removes one for the same rule. There is no allowance for a deliberate one, so
+a new boundary that must catch everything reuses a helper that already holds
+its suppression.

@@ -15,7 +15,7 @@ from doug.precision import corpus_table, fold, wilson
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from pattern_precision import _pop_precision  # noqa: E402
+from pattern_precision import _pop_precision
 
 
 def test_wilson_stays_inside_zero_one_at_the_extremes():

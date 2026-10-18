@@ -42,7 +42,7 @@ from doug.backtest.harvest import harvest
 from doug.backtest.replay import to_metadata
 from doug.features import extract_features
 
-print = functools.partial(print, flush=True)  # noqa: A001
+print = functools.partial(print, flush=True)
 
 CACHE = Path(".backtest-cache")
 REPOS = [

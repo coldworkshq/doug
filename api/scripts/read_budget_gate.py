@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from doug import features, reader, review  # noqa: E402
+from doug import features, reader, review
 
 END_SHA = "135c8e5"
 N_COMMITS = 30

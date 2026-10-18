@@ -31,7 +31,7 @@ from doug.backtest.git_labels import find_reverted_prs_dated
 from doug.backtest.replay import to_metadata
 from doug.reader import MODEL, ReaderVerdict, verdict_from_reader
 
-print = functools.partial(print, flush=True)  # noqa: A001
+print = functools.partial(print, flush=True)
 
 CACHE = Path(".backtest-cache")
 PROBES = [

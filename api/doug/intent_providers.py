@@ -137,7 +137,7 @@ def fetch_report(gh, owner: str, repo: str, ref: str | None = None) -> FetchRepo
                 path=directory,
                 **({"ref": ref} if ref else {}),
             ).parsed_data
-        except Exception as e:  # noqa: BLE001 — classify below
+        except Exception as e:  # classify below
             if _is_missing(e):
                 continue
             raise

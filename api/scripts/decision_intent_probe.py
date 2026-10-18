@@ -39,7 +39,7 @@ from doug import intent, intent_providers, reader
 from doug.backtest.harvest import resolve_token
 from doug.review import fetch_pr
 
-print = functools.partial(print, flush=True)  # noqa: A001
+print = functools.partial(print, flush=True)
 
 OUT = Path(".backtest-cache/decision-intent-probe")
 SEED = 0
