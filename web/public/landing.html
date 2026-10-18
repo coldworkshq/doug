@@ -296,7 +296,7 @@ footer canvas{width:44px;height:44px}
       <!-- Sign-in returns to the workspace (ADR-0034). The door itself is
            public: everything on this page reads no session. -->
       <a class="btn btn-ghost btn-sm" href="/sign-in">Log in</a>
-      <a class="btn btn-primary btn-sm" href="https://github.com/apps/dougs-review">Install Coldworks</a>
+      <a class="btn btn-primary btn-sm" href="/docs">Read the docs</a>
     </div>
   </div>
 </nav>
@@ -307,11 +307,10 @@ footer canvas{width:44px;height:44px}
     <div class="herogrid">
       <div>
         <h1>Use AI to need less AI.</h1>
-        <p class="sub">Coldworks reviews your pull requests, remembers what your team decided, and turns the judgments it keeps repeating into checks you own. One product, free to start. The reviewer installs on its own today; the rest carries its state on this page.</p>
+        <p class="sub">Coldworks reviews your pull requests, remembers what your team decided, and turns the judgments it keeps repeating into checks you own. One product, free to start. The reviewer is not open to new installs yet, and each part carries its state on this page.</p>
         <div class="cta">
-          <a class="btn btn-primary btn-lg" href="https://github.com/apps/dougs-review">Install Coldworks on GitHub</a>
-          <a class="btn btn-ghost btn-lg" href="/docs">Read the docs</a>
-          <span class="note">A GitHub App on your repositories. No sales call, no credit card, nothing to schedule.</span>
+          <a class="btn btn-primary btn-lg" href="/docs">Read the docs</a>
+          <span class="note">Reviews runs as a GitHub App on your repositories. It is not open to new installs yet.</span>
         </div>
       </div>
       <div class="latframe">
@@ -417,11 +416,11 @@ footer canvas{width:44px;height:44px}
           <h3>Most pull requests don't need a human. Coldworks works out which ones do.</h3>
           <p>Every pull request gets a verdict: cleared, or needs a reader. Coldworks routes attention. It never blocks a merge, never writes code, and publishes its own miss rate.</p>
           <ul>
-            <li>Runs on your own model keys, or on the free deterministic tier with no model at all.</li>
+            <li>Reads each pull request with a model by default. A repository can turn the model read off and keep the deterministic verdict.</li>
             <li>Reads the record first. A change that contradicts a settled decision is routed to the person who owns it.</li>
             <li>Every verdict is recorded with its evidence, which is what the guards learn from.</li>
           </ul>
-          <div class="free"><a class="btn btn-primary" href="https://github.com/apps/dougs-review">Install just Reviews</a><em>Free on any repository. Public source: <a href="https://github.com/coldworkshq/doug" style="color:var(--cool)">coldworkshq/doug</a>.</em></div>
+          <div class="free"><em>Not open to new installs yet. Public source: <a href="https://github.com/coldworkshq/doug" style="color:var(--cool)">coldworkshq/doug</a>.</em></div>
         </div>
         <div class="vig">
           <div class="vig-hd"><b>acme/platform</b> #1839 · Move billing webhooks to the new queue</div>
@@ -528,9 +527,9 @@ ledger   ./.coldworks/audit/ledger.jsonl</div>
       <div class="plan">
         <div class="pname"><div><b>Coldworks</b><small>Free</small></div></div>
         <div class="price">Free<small>per installation</small></div>
-        <div class="for">Reviews and memory for every repository you install on. Install just Reviews if that is all you want.</div>
-        <ul><li>Deterministic verdict and check run, no model reads</li><li>Memory on public repositories, over MCP and search</li><li>Never blocks, never writes code</li><li>Published miss rate</li></ul>
-        <a class="btn btn-primary" href="https://github.com/apps/dougs-review">Install Coldworks on GitHub</a>
+        <div class="for">Reviews and memory for every repository you install on.</div>
+        <ul><li>A verdict and a check run on every pull request</li><li>Memory on public repositories, over MCP and search</li><li>Never blocks, never writes code</li><li>Published miss rate</li></ul>
+        <span class="tag gated" style="align-self:flex-start">Not open to new installs yet.</span>
       </div>
       <div class="plan">
         <div class="pname"><div><b>Coldworks</b><small>Team</small></div></div>
@@ -556,8 +555,7 @@ ledger   ./.coldworks/audit/ledger.jsonl</div>
   <section class="close">
     <h2>Every week, a little colder.</h2>
     <div class="cta">
-      <a class="btn btn-primary btn-lg" href="https://github.com/apps/dougs-review">Install Coldworks on GitHub</a>
-      <a class="btn btn-ghost btn-lg" href="/docs">Read the docs</a>
+      <a class="btn btn-primary btn-lg" href="/docs">Read the docs</a>
     </div>
   </section>
 </div>
@@ -567,7 +565,7 @@ ledger   ./.coldworks/audit/ledger.jsonl</div>
     <div class="cols">
       <div><b>Product</b><a href="#reviews">Reviews</a><a href="#moments">Memory</a><a href="#moments">Guards</a><a href="#audit">The audit</a></div>
       <div><b>Company</b><a href="/docs">Docs</a><a href="/dashboard/overview">Workspace</a><a href="https://github.com/coldworkshq">GitHub</a></div>
-      <div><b>Reviews</b><a href="https://github.com/coldworkshq/doug">Source</a><a href="https://github.com/apps/dougs-review">Install</a></div>
+      <div><b>Reviews</b><a href="https://github.com/coldworkshq/doug">Source</a></div>
     </div>
     <div style="display:flex;align-items:center;gap:12px"><canvas id="footmark" width="44" height="44" aria-hidden="true"></canvas><span>Coldworks · coldworks.dev</span></div>
   </div>

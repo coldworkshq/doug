@@ -156,7 +156,14 @@ def _web_passthrough_env() -> set[str]:
     return set(re.findall(r"(\w+)=\$\{\1:-\}", line))
 
 
-def test_the_merge_deploy_carries_the_mapping_from_repository_variables():
+# Forwarded names whose value a public run log must never print. GitHub masks
+# a secret wherever it appears in a log and prints a repository variable in
+# full, and doug's run logs are public: the Guards mapping, as a variable,
+# was printed by every web deploy.
+_MASKED_IN_LOGS = frozenset({"DOUG_GUARDS_INSTALLATIONS"})
+
+
+def test_the_merge_deploy_carries_the_mapping_from_a_secret_and_the_url_from_a_variable():
     """A value set on doug-web by hand does not survive a merge deploy.
 
     web() passes COLDWORKS_REGISTRY_URL and DOUG_GUARDS_INSTALLATIONS to
@@ -168,11 +175,14 @@ def test_the_merge_deploy_carries_the_mapping_from_repository_variables():
     installation (R11 item 3) had nowhere to land that a deploy would keep.
 
     Derived from the script rather than restated: every name web() forwards
-    from its environment must be set on the web Deploy step, and set from a
-    repository variable, never a literal. The mapping names an engine tenant,
-    and doug is public; the workflow file may name the variable but never
-    hold its value. An unset repository variable renders as the empty string,
-    which is exactly what the script's own default sends today.
+    from its environment must be set on the web Deploy step, from a
+    repository variable or a secret, never a literal. The mapping names an
+    engine tenant, and doug is public; the workflow file may name it but
+    never hold its value. Its run logs are public too, and GitHub prints a
+    repository variable in full but masks a secret, so the mapping must come
+    from a secret: as a variable, every web deploy printed it. An unset value
+    renders as the empty string, which is exactly what the script's own
+    default sends today.
     """
     forwarded = _web_passthrough_env()
     assert {"COLDWORKS_REGISTRY_URL", "DOUG_GUARDS_INSTALLATIONS"} <= forwarded, (
@@ -189,10 +199,17 @@ def test_the_merge_deploy_carries_the_mapping_from_repository_variables():
             "Deploy step in deploy.yml never sets it; a merge deploy empties it "
             "on the service"
         )
-        assert match.group(1) == f"${{{{ vars.{name} }}}}", (
+        source = "secrets" if name in _MASKED_IN_LOGS else "vars"
+        assert match.group(1) == f"${{{{ {source}.{name} }}}}", (
             f"the web Deploy step sets {name} to {match.group(1)!r}; it must be "
-            f"`${{{{ vars.{name} }}}}`, a repository variable, so the value stays "
-            "the founder's setting and out of this public file"
+            f"`${{{{ {source}.{name} }}}}`, "
+            + (
+                "a secret, because a repository variable prints in full in "
+                "this public repository's run logs"
+                if source == "secrets"
+                else "a repository variable, so the value stays the founder's "
+                "setting and out of this public file"
+            )
         )
 
 
