@@ -1,3 +1,11 @@
+> [!IMPORTANT]
+> **This repository is retired, as of 2026-10-19.** On retirement it is renamed
+> `coldworkshq/doug-archive` and archived, so it is read-only. Work continues in
+> the new private repository `coldworkshq/coldworks`. In this repository, every
+> reference to `coldworkshq/coldworks` or `coldworks#N` means
+> `coldworkshq/coldworks-archive`, the repository that held that name before the
+> retirement.
+
 <h1 align="center">Coldworks</h1>
 
 <p align="center"><em>Most pull requests don't need a human.</em></p>
