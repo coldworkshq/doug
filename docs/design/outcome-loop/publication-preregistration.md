@@ -1,11 +1,21 @@
 # Publication pre-registration — the outcome loop
 
-**Status:** LOCKED v9 — 2026-08-11
+**Status:** LOCKED v10 — 2026-10-20. Withdrawn; see the withdrawal notice.
 **Roadmap:** M3 item 7 · **Mitigation:** design-lock altitude O3 (`design-lock.md:61`)
 **Companion:** `60-day-backfill-runbook.md` — the production catch-up is a hard
 operational gate before the first 14-day publication (`design-lock.md:47`). The
 runbook and this lock are built on `m3-60-day-backfill`; neither the catch-up nor
 the v9 hash deployment has occurred in production.
+
+> **Withdrawal notice, 2026-10-20.** The reviewer this document governs is
+> retired, and this publication is withdrawn as of 2026-10-20. No publication
+> ships on 15 January 2027 or on any later date that §12 sets. No publication date
+> was due when this notice landed, so §12's rule against moving or cancelling a
+> due date is not engaged. v10 adds only this notice, the status line, and one line
+> in §12; every rule in this document is the v9 text, kept unchanged as the record
+> of what was pre-registered. v9 stays published at commit
+> `a4c1e0e53c8de10bf8b455345e3307c8432f4624`, with SHA-256
+> `c8e30da386362351a8d320e1ce91e725655a2f6517e5568c61cd9ad0168e60f2`.
 
 **Changelog.** v1 failed review: the miss rate was not computable, the censoring
 arithmetic ran opposite to its own stated direction, "within the window" had no
@@ -908,6 +918,9 @@ a stranger can check us, and a stranger cannot check an unnamed place.
 be public *before* install #1, so a rule keyed to install #1 cannot satisfy it.
 **Provisional: 15 January 2027**, superseded by a new hashed version once install #1
 dates the real series. A named partial deviation from O3, not a silent omission.
+
+**Withdrawn 2026-10-20:** no publication ships on 15 January 2027. See the
+withdrawal notice at the top of this document.
 
 The Doug-on-Doug scoreboard is not on this cadence — it is a live public page (M3).
 
